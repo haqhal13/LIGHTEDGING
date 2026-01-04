@@ -373,6 +373,7 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
    * - Weight trades based on how far inventory is from target ratio
    * - Side with less inventory gets traded more aggressively
    * - Can skip a side if it's already overweight (above target ratio)
+   * - STOP trading the losing side when winning side price > 0.90
    */
   private calculateDualSideSignals(
     state: MarketState,
@@ -389,6 +390,11 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
     if (this.balance < this.rebalanceConfig.min_trade_size) {
       return signals;
     }
+
+    // PRICE THRESHOLD: When one side > 0.90, only trade the winning side
+    const priceThreshold = 0.90;
+    const upIsWinning = yesPrice > priceThreshold;
+    const downIsWinning = noPrice > priceThreshold;
 
     // Calculate base trade sizes using formula: base + (price × multiplier)
     const baseUpAmount = this.calculateTradeSize(yesPrice);
@@ -414,8 +420,16 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
 
     // YES weight: if underweight (negative deviation), weight = 1.0
     // If overweight, reduce weight proportionally
-    const yesWeight = Math.max(0, Math.min(1, 1 - (yesDeviation / maxSkew)));
-    const noWeight = Math.max(0, Math.min(1, 1 - (noDeviation / maxSkew)));
+    let yesWeight = Math.max(0, Math.min(1, 1 - (yesDeviation / maxSkew)));
+    let noWeight = Math.max(0, Math.min(1, 1 - (noDeviation / maxSkew)));
+
+    // STOP trading the losing side when winning side > 0.90
+    if (upIsWinning) {
+      noWeight = 0;  // Stop trading DOWN when UP > 0.90
+    }
+    if (downIsWinning) {
+      yesWeight = 0;  // Stop trading UP when DOWN > 0.90
+    }
 
     // Apply weights to trade amounts
     const upTradeAmount = baseUpAmount * yesWeight;
