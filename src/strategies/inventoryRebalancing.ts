@@ -135,9 +135,10 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
     const totalInventoryValue = inventory.yesValue + inventory.noValue;
     const hasInventory = totalInventoryValue > 0;
 
-    // Check cooldown periods
+    // Check cooldown periods (market-specific)
+    const cooldownSec = this.getMarketCooldown(marketType);
     const timeSinceLastRebalance = (now - state.lastRebalanceTime) / 1000;
-    if (timeSinceLastRebalance < this.rebalanceConfig.min_seconds_between_rebalances) {
+    if (timeSinceLastRebalance < cooldownSec) {
       return [];
     }
 
@@ -148,6 +149,11 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
         return [];
       }
       state.flipDetected = false;
+    }
+
+    // CLOSE BEHAVIOR: Skip some trades near market close (15m markets only)
+    if (this.shouldSkipTradeNearClose(state)) {
+      return [];
     }
 
     // Calculate YES ratio for inventory tracking
@@ -162,6 +168,9 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
 
     const targetRatio = this.rebalanceConfig.target_yes_ratio;
 
+    // CLOSE BEHAVIOR: Get size multiplier for near-close trades (15m markets only)
+    const closeSizeMultiplier = this.getCloseSizeMultiplier(state);
+
     // DUAL-SIDE TRADING: Generate signals for BOTH UP and DOWN every cycle
     // This builds balanced inventory for recovery when prices flip
     const signals = this.calculateDualSideSignals(
@@ -170,7 +179,8 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
       yesPrice,
       noPrice,
       yesRatio,
-      targetRatio
+      targetRatio,
+      closeSizeMultiplier
     );
 
     if (signals.length > 0) {
@@ -381,7 +391,8 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
     yesPrice: number,
     noPrice: number,
     currentYesRatio: number,
-    targetRatio: number
+    targetRatio: number,
+    closeSizeMultiplier: number = 1.0
   ): TradeSignal[] {
     const { market, yesTokenId, noTokenId, marketType } = state;
     const signals: TradeSignal[] = [];
@@ -391,14 +402,33 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
       return signals;
     }
 
-    // PRICE THRESHOLD: When one side > 0.90, only trade the winning side
-    const priceThreshold = 0.90;
-    const upIsWinning = yesPrice > priceThreshold;
-    const downIsWinning = noPrice > priceThreshold;
+    // PRICE STOP THRESHOLD: When one side >= this, stop trading the losing side
+    const priceStopThreshold = this.rebalanceConfig.price_stop_threshold;
+    const upIsWinning = yesPrice >= priceStopThreshold;
+    const downIsWinning = noPrice >= priceStopThreshold;
 
     // Calculate base trade sizes using formula: base + (price × multiplier)
-    const baseUpAmount = this.calculateTradeSize(yesPrice);
-    const baseDownAmount = this.calculateTradeSize(noPrice);
+    // Apply close size multiplier for near-close behavior (15m markets)
+    const baseUpAmount = this.calculateTradeSize(yesPrice, marketType) * closeSizeMultiplier;
+    const baseDownAmount = this.calculateTradeSize(noPrice, marketType) * closeSizeMultiplier;
+
+    // TILT BOOST: When one side >= tilt_threshold, boost trades on winning side
+    const tiltThreshold = this.rebalanceConfig.tilt_threshold;
+    const tiltBoost = this.rebalanceConfig.tilt_boost_multiplier;
+
+    let upBoost = 1.0;
+    let downBoost = 1.0;
+
+    if (yesPrice >= tiltThreshold) {
+      upBoost = tiltBoost;  // Boost UP trades when UP is winning
+    }
+    if (noPrice >= tiltThreshold) {
+      downBoost = tiltBoost;  // Boost DOWN trades when DOWN is winning
+    }
+
+    // Apply boost to base amounts
+    const boostedUpAmount = baseUpAmount * upBoost;
+    const boostedDownAmount = baseDownAmount * downBoost;
 
     const totalInventory = inventory.yesValue + inventory.noValue;
 
@@ -431,9 +461,9 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
       yesWeight = 0;  // Stop trading UP when DOWN > 0.90
     }
 
-    // Apply weights to trade amounts
-    const upTradeAmount = baseUpAmount * yesWeight;
-    const downTradeAmount = baseDownAmount * noWeight;
+    // Apply weights to BOOSTED trade amounts
+    const upTradeAmount = boostedUpAmount * yesWeight;
+    const downTradeAmount = boostedDownAmount * noWeight;
 
     let remainingBalance = this.balance;
 
@@ -446,6 +476,7 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
           rebalance: true,
           dualSideTrade: true,
           weight: yesWeight,
+          tiltBoost: upBoost,
           currentYesRatio,
           targetRatio,
           outcome: "Up",
@@ -464,6 +495,7 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
           rebalance: true,
           dualSideTrade: true,
           weight: noWeight,
+          tiltBoost: downBoost,
           currentYesRatio,
           targetRatio,
           outcome: "Down",
@@ -473,30 +505,32 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
     }
 
     // If no trades due to weighting, but we have balance and one side is very underweight
-    // Force a trade on the underweight side to maintain some inventory balance
+    // Force a trade on the underweight side to maintain some inventory balance (with tilt boost)
     if (signals.length === 0 && this.balance >= this.rebalanceConfig.min_trade_size) {
       const buyYes = inventory.yesValue <= inventory.noValue;
 
-      if (buyYes && baseUpAmount >= this.rebalanceConfig.min_trade_size && this.balance >= baseUpAmount) {
-        const tradeSize = baseUpAmount / yesPrice;
+      if (buyYes && boostedUpAmount >= this.rebalanceConfig.min_trade_size && this.balance >= boostedUpAmount) {
+        const tradeSize = boostedUpAmount / yesPrice;
         if (tradeSize >= 0.01) {
           const tradePrice = this.calculateOrderPrice(yesPrice, "BUY");
           signals.push(this.createBuySignal(market, yesTokenId, tradePrice, Math.floor(tradeSize * 100) / 100, {
             rebalance: true,
             fallbackTrade: true,
+            tiltBoost: upBoost,
             currentYesRatio,
             targetRatio,
             outcome: "Up",
             marketType,
           }));
         }
-      } else if (!buyYes && baseDownAmount >= this.rebalanceConfig.min_trade_size && this.balance >= baseDownAmount) {
-        const tradeSize = baseDownAmount / noPrice;
+      } else if (!buyYes && boostedDownAmount >= this.rebalanceConfig.min_trade_size && this.balance >= boostedDownAmount) {
+        const tradeSize = boostedDownAmount / noPrice;
         if (tradeSize >= 0.01) {
           const tradePrice = this.calculateOrderPrice(noPrice, "BUY");
           signals.push(this.createBuySignal(market, noTokenId, tradePrice, Math.floor(tradeSize * 100) / 100, {
             rebalance: true,
             fallbackTrade: true,
+            tiltBoost: downBoost,
             currentYesRatio,
             targetRatio,
             outcome: "Down",
@@ -522,15 +556,43 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
     }
   }
 
-  private calculateTradeSize(price: number): number {
+  /**
+   * Calculate trade size based on market type
+   * 1-Hour: $0.50 + (price × 8), clamped $0.01-$14.00
+   * 15-Min: $0.25 + (price × 12), clamped $0.01-$26.00
+   */
+  private calculateTradeSize(price: number, marketType: string): number {
     const config = this.rebalanceConfig;
+    const is15m = this.is15MinuteMarket(marketType);
 
-    if (config.use_price_based_sizing) {
-      const dynamicSize = config.sizing_base + (price * config.sizing_price_multiplier);
-      return Math.max(config.min_trade_size, Math.min(dynamicSize, config.max_trade_size));
+    if (is15m) {
+      // 15-Minute: aggressive sizing
+      const size = config.sizing_15m_base + (price * config.sizing_15m_multiplier);
+      return Math.max(config.sizing_15m_min_trade, Math.min(size, config.sizing_15m_max_trade));
+    } else {
+      // 1-Hour: conservative sizing
+      const size = config.sizing_1h_base + (price * config.sizing_1h_multiplier);
+      return Math.max(config.sizing_1h_min_trade, Math.min(size, config.sizing_1h_max_trade));
     }
+  }
 
-    return config.max_trade_size;
+  /**
+   * Get cooldown seconds based on market type
+   * 1-Hour: 6 seconds
+   * 15-Min: 2 seconds
+   */
+  private getMarketCooldown(marketType: string): number {
+    const config = this.rebalanceConfig;
+    return this.is15MinuteMarket(marketType)
+      ? config.sizing_15m_cooldown_sec
+      : config.sizing_1h_cooldown_sec;
+  }
+
+  /**
+   * Check if market type is 15-minute
+   */
+  private is15MinuteMarket(marketType: string): boolean {
+    return marketType.includes('15m') || marketType.includes('updown-15');
   }
 
   /**
@@ -544,5 +606,85 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
       case 'ethereum-up-or-down': return 'ETH-1h';
       default: return marketType;
     }
+  }
+
+  /**
+   * Get minutes and seconds until market close
+   * Returns { minutesLeft, secondsLeft } or null if no end date
+   */
+  private getTimeUntilClose(state: MarketState): { minutesLeft: number; secondsLeft: number } | null {
+    const endDate = state.market.endDate;
+    if (!endDate) {
+      return null;
+    }
+
+    const now = Date.now();
+    const endTime = new Date(endDate).getTime();
+    const msLeft = endTime - now;
+
+    if (msLeft <= 0) {
+      return { minutesLeft: 0, secondsLeft: 0 };
+    }
+
+    const secondsLeft = msLeft / 1000;
+    const minutesLeft = secondsLeft / 60;
+
+    return { minutesLeft, secondsLeft };
+  }
+
+  /**
+   * Check if trade should be skipped due to close behavior (frequency reduction)
+   * Returns true if trade should be skipped
+   */
+  private shouldSkipTradeNearClose(state: MarketState): boolean {
+    // Only apply to 15-minute markets
+    if (!this.is15MinuteMarket(state.marketType)) {
+      return false;
+    }
+
+    const timeLeft = this.getTimeUntilClose(state);
+    if (!timeLeft) {
+      return false;
+    }
+
+    const config = this.rebalanceConfig;
+
+    // Check if we should stop trading completely
+    if (config.close_stop_trading_seconds > 0 && timeLeft.secondsLeft <= config.close_stop_trading_seconds) {
+      return true;
+    }
+
+    // Check if we're in reduced activity zone
+    if (timeLeft.minutesLeft <= config.close_reduce_activity_minutes) {
+      // Only execute a percentage of trades (randomly skip)
+      return Math.random() > config.close_activity_multiplier;
+    }
+
+    return false;
+  }
+
+  /**
+   * Get trade size multiplier based on time until close
+   * Returns multiplier (e.g., 0.60 for 60% of normal size)
+   */
+  private getCloseSizeMultiplier(state: MarketState): number {
+    // Only apply to 15-minute markets
+    if (!this.is15MinuteMarket(state.marketType)) {
+      return 1.0;
+    }
+
+    const timeLeft = this.getTimeUntilClose(state);
+    if (!timeLeft) {
+      return 1.0;
+    }
+
+    const config = this.rebalanceConfig;
+
+    // Check if we're in reduced size zone
+    if (timeLeft.minutesLeft <= config.close_reduce_size_minutes) {
+      return config.close_size_multiplier;
+    }
+
+    return 1.0;
   }
 }

@@ -11,7 +11,7 @@
 # ----------------------------------------------------------------------------
 # 1. BANKROLL & ALLOCATION
 # ----------------------------------------------------------------------------
-bankroll_total: 8000.0
+bankroll_total: 10000.0
 # Total $ you allow the strategy to use (hard cap)
 # Example: 8000.0 means the strategy can use up to $8000
 
@@ -67,27 +67,41 @@ max_trade_size: 26.0
 # Example: 26 = never trade more than $26 per order (matches your analyzed data)
 
 # ----------------------------------------------------------------------------
-# 3b. PRICE-BASED TRADE SIZING (optional - scales with price)
+# 3b. MARKET-SPECIFIC TRADE SIZING
 # ----------------------------------------------------------------------------
-use_price_based_sizing: true
-# Enable dynamic sizing based on price (overrides min/max_trade_size)
-# Formula: trade_size = sizing_base + (price × sizing_price_multiplier)
-# Options: true or false
-
-sizing_base: 0.75
-# Base amount in $ added to every trade (e.g. 0.50-5.00)
-# This is the minimum you'll trade regardless of price
-# Example: 0.75 = always add at least $0.75 base
-
-sizing_price_multiplier: 10.0
-# How much to scale trade size per unit of price (e.g. 5.0-20.0)
-# Higher = bigger trades at higher prices (more confident bets)
-# Example: 10.0 means at price 0.50, add $5.00 to base
+# Different sizing for 1-hour vs 15-minute markets:
+#   - 1-hour = conservative (smaller bets, slower)
+#   - 15-minute = aggressive (bigger bets, faster)
 #
-# SIZING EXAMPLES with base=0.75, multiplier=10:
-#   Price 0.20 (cheap)     → $0.75 + ($0.20 × 10) = $2.75
-#   Price 0.50 (mid)       → $0.75 + ($0.50 × 10) = $5.75
-#   Price 0.80 (expensive) → $0.75 + ($0.80 × 10) = $8.75
+# Formula: trade_size = base + (price × multiplier)
+#
+# ┌─────────────┬──────────┬────────────┬───────────┬───────────┬─────────────┐
+# │ Market Type │ Base ($) │ Multiplier │ Min Trade │ Max Trade │ Cooldown(s) │
+# ├─────────────┼──────────┼────────────┼───────────┼───────────┼─────────────┤
+# │ 1-Hour      │ $0.50    │ 8.00       │ $0.01     │ $14.00    │ 6 sec       │
+# │ 15-Minute   │ $0.25    │ 12.00      │ $0.01     │ $26.00    │ 2 sec       │
+# └─────────────┴──────────┴────────────┴───────────┴───────────┴─────────────┘
+#
+# EXAMPLES:
+#   1-Hour @ $0.50:    $0.50 + (0.50 × 8)  = $4.50
+#   15-Min @ $0.50:    $0.25 + (0.50 × 12) = $6.25
+#
+#   1-Hour @ $0.80:    $0.50 + (0.80 × 8)  = $6.90
+#   15-Min @ $0.80:    $0.25 + (0.80 × 12) = $9.85
+
+# --- 1-HOUR MARKET SETTINGS (conservative) ---
+sizing_1h_base: 0.50
+sizing_1h_multiplier: 8.00
+sizing_1h_min_trade: 0.01
+sizing_1h_max_trade: 14.00
+sizing_1h_cooldown_sec: 6
+
+# --- 15-MINUTE MARKET SETTINGS (aggressive) ---
+sizing_15m_base: 0.25
+sizing_15m_multiplier: 12.00
+sizing_15m_min_trade: 0.01
+sizing_15m_max_trade: 26.00
+sizing_15m_cooldown_sec: 2
 
 # ----------------------------------------------------------------------------
 # 4. PRICE / EXECUTION SAFETY (avoid bad fills)
@@ -131,7 +145,98 @@ reduce_only_mode: false
 # Options: true or false
 
 # ----------------------------------------------------------------------------
-# 6. REVERSAL HANDLING (so you can flip 60/40 → 40/60)
+# 6. TILT TRADING (aggressive when one side winning)
+# ----------------------------------------------------------------------------
+#
+# FULL BEHAVIOR TABLE (based on current settings):
+#
+# ┌────────────┬────────────┬───────────┬────────────┬─────────────────────────┐
+# │ UP Price   │ DOWN Price │ UP Boost  │ DOWN Boost │ Behavior                │
+# ├────────────┼────────────┼───────────┼────────────┼─────────────────────────┤
+# │ 0.05       │ 0.95       │ STOPPED   │ 1.25x      │ Only trade DOWN         │
+# │ 0.10       │ 0.90       │ STOPPED   │ 1.25x      │ Only trade DOWN         │
+# │ 0.15       │ 0.85       │ 1.0x      │ 1.25x      │ DOWN boosted            │
+# │ 0.20       │ 0.80       │ 1.0x      │ 1.25x      │ DOWN boosted            │
+# │ 0.25       │ 0.75       │ 1.0x      │ 1.25x      │ DOWN boosted            │
+# │ 0.30       │ 0.70       │ 1.0x      │ 1.25x      │ DOWN boosted            │
+# │ 0.35       │ 0.65       │ 1.0x      │ 1.25x      │ DOWN boosted            │
+# │ 0.40       │ 0.60       │ 1.0x      │ 1.25x      │ DOWN boosted            │
+# │ 0.41       │ 0.59       │ 1.0x      │ 1.25x      │ DOWN boosted (threshold)│
+# │ 0.45       │ 0.55       │ 1.0x      │ 1.0x       │ Normal (no tilt)        │
+# │ 0.50       │ 0.50       │ 1.0x      │ 1.0x       │ Normal (balanced)       │
+# │ 0.55       │ 0.45       │ 1.0x      │ 1.0x       │ Normal (no tilt)        │
+# │ 0.59       │ 0.41       │ 1.25x     │ 1.0x       │ UP boosted (threshold)  │
+# │ 0.60       │ 0.40       │ 1.25x     │ 1.0x       │ UP boosted              │
+# │ 0.65       │ 0.35       │ 1.25x     │ 1.0x       │ UP boosted              │
+# │ 0.70       │ 0.30       │ 1.25x     │ 1.0x       │ UP boosted              │
+# │ 0.75       │ 0.25       │ 1.25x     │ 1.0x       │ UP boosted              │
+# │ 0.80       │ 0.20       │ 1.25x     │ 1.0x       │ UP boosted              │
+# │ 0.85       │ 0.15       │ 1.25x     │ 1.0x       │ UP boosted              │
+# │ 0.90       │ 0.10       │ 1.25x     │ STOPPED    │ Only trade UP           │
+# │ 0.95       │ 0.05       │ 1.25x     │ STOPPED    │ Only trade UP           │
+# └────────────┴────────────┴───────────┴────────────┴─────────────────────────┘
+#
+# KEY:
+#   tilt_threshold (0.59)      = When boost kicks in
+#   tilt_boost_multiplier (1.25x) = How much bigger winning trades are
+#   price_stop_threshold (0.90)   = When losing side STOPS trading
+#
+# Adjust these values to change the table above:
+
+tilt_threshold: 0.59
+# When price >= this, boost trades on that side (e.g. 0.55-0.70)
+
+tilt_boost_multiplier: 1.25
+# How much to boost winning side trades (e.g. 1.1 = 10%, 1.25 = 25%, 1.5 = 50%)
+
+price_stop_threshold: 0.90
+# When price >= this, STOP trading the losing side completely (e.g. 0.85-0.95)
+
+# ----------------------------------------------------------------------------
+# 6b. MARKET CLOSE BEHAVIOR (15-minute markets only)
+# ----------------------------------------------------------------------------
+# Reduce trading activity as market approaches close to avoid getting stuck
+#
+# BEHAVIOR TABLE:
+# ┌────────────┬─────────────────┬────────────┐
+# │ Time Left  │ Trade Frequency │ Trade Size │
+# ├────────────┼─────────────────┼────────────┤
+# │ 5:00+      │ 100%            │ 100%       │
+# │ 4:00       │ 25%             │ 100%       │
+# │ 3:00       │ 25%             │ 100%       │
+# │ 2:00       │ 25%             │ 100%       │
+# │ 1:00       │ 25%             │ 60%        │
+# │ 0:30       │ 25%             │ 60%        │
+# │ 0:10       │ 25%             │ 60%        │
+# └────────────┴─────────────────┴────────────┘
+#
+# Summary:
+#   - 4 minutes left → trade 75% less often
+#   - 1 minute left → also reduce size by 40%
+#   - Never stops → keeps trading until close
+
+close_reduce_activity_minutes: 4
+# Start reducing trade frequency at X minutes before close (e.g. 2-5)
+# Example: 4 = at 4 minutes left, start skipping trades
+
+close_activity_multiplier: 0.25
+# What % of trades to execute in reduced activity mode (e.g. 0.10-0.50)
+# Example: 0.25 = only 25% of trades execute (skip 75%)
+
+close_reduce_size_minutes: 1
+# Start reducing trade size at X minutes before close (e.g. 0.5-2)
+# Example: 1 = at 1 minute left, reduce trade sizes
+
+close_size_multiplier: 0.60
+# Multiply trade size by this in reduced size mode (e.g. 0.40-0.80)
+# Example: 0.60 = trades are 60% of normal size
+
+close_stop_trading_seconds: 0
+# Stop trading completely at X seconds before close (0 = never stop)
+# Example: 0 = keep trading until market closes
+
+# ----------------------------------------------------------------------------
+# 7. REVERSAL HANDLING (so you can flip 60/40 → 40/60)
 # ----------------------------------------------------------------------------
 flip_detection_window_sec: 30
 # How quickly you decide momentum/price direction changed (e.g. 10-60)
@@ -147,7 +252,7 @@ post_flip_cooldown_sec: 15
 # Example: 15 = wait 15 seconds after flip detection before trading again
 
 # ----------------------------------------------------------------------------
-# 7. LOGGING / TUNING HELPERS (so trial & error is easier)
+# 8. LOGGING / TUNING HELPERS (so trial & error is easier)
 # ----------------------------------------------------------------------------
 log_every_trade: true
 # Record each action (needed to see why performance differs)
@@ -158,7 +263,7 @@ metrics_window_trades: 100
 # Example: 100 = analyze last 100 trades for performance metrics
 
 # ----------------------------------------------------------------------------
-# MARKET CONFIGURATION
+# 9. MARKET CONFIGURATION
 # ----------------------------------------------------------------------------
 market_condition_id: ""
 # Leave empty to use the first active market, or specify a condition ID

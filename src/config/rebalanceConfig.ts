@@ -24,10 +24,19 @@ export interface RebalanceConfig {
   min_trade_size: number;
   max_trade_size: number;
 
-  // Price-based trade sizing: trade_size = base_size + (price × price_multiplier)
-  use_price_based_sizing: boolean;
-  sizing_base: number;
-  sizing_price_multiplier: number;
+  // Market-specific trade sizing (1-hour vs 15-minute)
+  // 1-Hour markets (conservative)
+  sizing_1h_base: number;
+  sizing_1h_multiplier: number;
+  sizing_1h_min_trade: number;
+  sizing_1h_max_trade: number;
+  sizing_1h_cooldown_sec: number;
+  // 15-Minute markets (aggressive)
+  sizing_15m_base: number;
+  sizing_15m_multiplier: number;
+  sizing_15m_min_trade: number;
+  sizing_15m_max_trade: number;
+  sizing_15m_cooldown_sec: number;
 
   // Price / execution safety
   slippage_buffer: number;
@@ -39,6 +48,18 @@ export interface RebalanceConfig {
   max_inventory_imbalance_ratio: number;
   stop_add_threshold: number;
   reduce_only_mode: boolean;
+
+  // Tilt trading (aggressive when winning)
+  tilt_threshold: number;
+  tilt_boost_multiplier: number;
+  price_stop_threshold: number;
+
+  // Market close behavior (15-minute markets)
+  close_reduce_activity_minutes: number;
+  close_activity_multiplier: number;
+  close_reduce_size_minutes: number;
+  close_size_multiplier: number;
+  close_stop_trading_seconds: number;
 
   // Reversal handling
   flip_detection_window_sec: number;
@@ -62,11 +83,20 @@ const DEFAULT_CONFIG: RebalanceConfig = {
   min_seconds_between_rebalances: 30,
   rebalance_strength_k: 0.5,
   max_rebalance_step_pct: 0.20,
-  min_trade_size: 0.10,
-  max_trade_size: 5.0,
-  use_price_based_sizing: false,
-  sizing_base: 1.0,
-  sizing_price_multiplier: 11.0,
+  min_trade_size: 0.01,
+  max_trade_size: 26.0,
+  // 1-Hour markets (conservative)
+  sizing_1h_base: 0.50,
+  sizing_1h_multiplier: 8.00,
+  sizing_1h_min_trade: 0.01,
+  sizing_1h_max_trade: 14.00,
+  sizing_1h_cooldown_sec: 6,
+  // 15-Minute markets (aggressive)
+  sizing_15m_base: 0.25,
+  sizing_15m_multiplier: 12.00,
+  sizing_15m_min_trade: 0.01,
+  sizing_15m_max_trade: 26.00,
+  sizing_15m_cooldown_sec: 2,
   slippage_buffer: 0.005,
   order_type: "limit",
   limit_price_offset: 0.003,
@@ -74,6 +104,15 @@ const DEFAULT_CONFIG: RebalanceConfig = {
   max_inventory_imbalance_ratio: 1.5,
   stop_add_threshold: 0.80,
   reduce_only_mode: false,
+  tilt_threshold: 0.59,
+  tilt_boost_multiplier: 1.25,
+  price_stop_threshold: 0.90,
+  // Market close behavior (15-minute markets)
+  close_reduce_activity_minutes: 4,
+  close_activity_multiplier: 0.25,
+  close_reduce_size_minutes: 1,
+  close_size_multiplier: 0.60,
+  close_stop_trading_seconds: 0,
   flip_detection_window_sec: 30,
   flip_response_multiplier: 1.5,
   post_flip_cooldown_sec: 15,
@@ -170,13 +209,12 @@ export function startConfigWatcher(onConfigChange?: (config: RebalanceConfig) =>
           logger.info(`📊 Hot-reload complete:`);
           logger.info(`   bankroll_total: $${newConfig.bankroll_total}`);
           logger.info(`   target_yes_ratio: ${(newConfig.target_yes_ratio * 100).toFixed(0)}%`);
-          logger.info(`   min_trade_size: $${newConfig.min_trade_size}`);
-          logger.info(`   max_trade_size: $${newConfig.max_trade_size}`);
-          logger.info(`   rebalance_band: ${(newConfig.rebalance_band * 100).toFixed(1)}%`);
-          logger.info(`   rebalance_strength_k: ${newConfig.rebalance_strength_k}`);
-          if (newConfig.use_price_based_sizing) {
-            logger.info(`   sizing: $${newConfig.sizing_base} + (price × $${newConfig.sizing_price_multiplier})`);
-          }
+          logger.info(`   tilt_threshold: ${newConfig.tilt_threshold}`);
+          logger.info(`   tilt_boost: ${newConfig.tilt_boost_multiplier}x`);
+          logger.info(`   price_stop: ${newConfig.price_stop_threshold}`);
+          logger.info(`   1h sizing: $${newConfig.sizing_1h_base} + (price × ${newConfig.sizing_1h_multiplier}), cooldown ${newConfig.sizing_1h_cooldown_sec}s`);
+          logger.info(`   15m sizing: $${newConfig.sizing_15m_base} + (price × ${newConfig.sizing_15m_multiplier}), cooldown ${newConfig.sizing_15m_cooldown_sec}s`);
+          logger.info(`   close behavior: reduce freq at ${newConfig.close_reduce_activity_minutes}min (${newConfig.close_activity_multiplier * 100}%), reduce size at ${newConfig.close_reduce_size_minutes}min (${newConfig.close_size_multiplier * 100}%)`);
 
           if (onConfigChange) {
             onConfigChange(newConfig);
