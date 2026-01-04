@@ -75,11 +75,11 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
         continue; // Market not yet discovered
       }
 
-      // Analyze this specific market
-      const signal = await this.analyzeMarket(marketState);
+      // Analyze this specific market - now returns array of signals (UP and DOWN)
+      const marketSignals = await this.analyzeMarket(marketState);
 
-      if (signal) {
-        signals.push(signal);
+      if (marketSignals && marketSignals.length > 0) {
+        signals.push(...marketSignals);
       }
     }
 
@@ -87,9 +87,10 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
   }
 
   /**
-   * Analyze a single market and return a trade signal if needed
+   * Analyze a single market and return trade signals for BOTH sides
+   * Returns array with UP and DOWN signals for dual-side trading
    */
-  private async analyzeMarket(state: MarketState): Promise<TradeSignal | null> {
+  private async analyzeMarket(state: MarketState): Promise<TradeSignal[]> {
     const { marketType, market } = state;
     let { yesTokenId, noTokenId } = state;
 
@@ -121,7 +122,7 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
 
     // If WebSocket prices not available, skip this market
     if (yesPrice === null || noPrice === null) {
-      return null;
+      return [];
     }
 
     // Update price history for flip detection
@@ -134,22 +135,17 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
     const totalInventoryValue = inventory.yesValue + inventory.noValue;
     const hasInventory = totalInventoryValue > 0;
 
-    // Check if we have unbalanced initial inventory
-    const inventoryOnlyYes = inventory.yesValue > 0 && inventory.noValue === 0;
-    const inventoryOnlyNo = inventory.noValue > 0 && inventory.yesValue === 0;
-    const isUnbalancedInitial = inventoryOnlyYes || inventoryOnlyNo;
-
-    // Check cooldown periods (but bypass for initial/balancing trades)
+    // Check cooldown periods
     const timeSinceLastRebalance = (now - state.lastRebalanceTime) / 1000;
-    if (!isUnbalancedInitial && timeSinceLastRebalance < this.rebalanceConfig.min_seconds_between_rebalances) {
-      return null;
+    if (timeSinceLastRebalance < this.rebalanceConfig.min_seconds_between_rebalances) {
+      return [];
     }
 
-    // Check post-flip cooldown (but bypass for initial/balancing trades)
-    if (!isUnbalancedInitial && state.flipDetected && state.flipDetectedTime) {
+    // Check post-flip cooldown
+    if (state.flipDetected && state.flipDetectedTime) {
       const timeSinceFlip = (now - state.flipDetectedTime) / 1000;
       if (timeSinceFlip < this.rebalanceConfig.post_flip_cooldown_sec) {
-        return null;
+        return [];
       }
       state.flipDetected = false;
     }
@@ -159,29 +155,16 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
 
     this.log(`[${this.getShortName(marketType)}] Prices: UP=$${yesPrice.toFixed(4)} DOWN=$${noPrice.toFixed(4)} | Inventory: UP=$${inventory.yesValue.toFixed(2)} DOWN=$${inventory.noValue.toFixed(2)} | Ratio: ${(yesRatio * 100).toFixed(1)}%`);
 
-    // Check if rebalancing is needed
-    const targetRatio = this.rebalanceConfig.target_yes_ratio;
-
-    const needsInitialTrade = !hasInventory && this.balance > this.rebalanceConfig.min_trade_size;
-    const needsBalancingTrade = isUnbalancedInitial && this.balance > this.rebalanceConfig.min_trade_size;
-
-    // CONTINUOUS TRADING: Always trade when cooldown passed and we have balance
-    // This ensures we trade on every cycle (respecting min_seconds_between_rebalances)
-    const canContinuouslyTrade = this.balance > this.rebalanceConfig.min_trade_size;
-
-    // Always allow trading if we have balance and cooldown passed
-    const needsRebalance = needsInitialTrade || needsBalancingTrade || canContinuouslyTrade;
-
-    if (!needsRebalance) {
-      return null;
+    // Check if we have enough balance
+    if (this.balance <= this.rebalanceConfig.min_trade_size) {
+      return [];
     }
 
-    // For continuous dual-side trading, we always allow trades
-    // The strategy naturally balances by buying whichever side has less inventory
-    // Risk controls are handled by the sizing formula and bankroll limits
+    const targetRatio = this.rebalanceConfig.target_yes_ratio;
 
-    // Calculate rebalance signal
-    const rebalanceSignal = this.calculateRebalanceSignal(
+    // DUAL-SIDE TRADING: Generate signals for BOTH UP and DOWN every cycle
+    // This builds balanced inventory for recovery when prices flip
+    const signals = this.calculateDualSideSignals(
       state,
       inventory,
       yesPrice,
@@ -190,19 +173,21 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
       targetRatio
     );
 
-    if (rebalanceSignal) {
+    if (signals.length > 0) {
       state.lastRebalanceTime = now;
       state.lastPrice = yesPrice;
       state.lastPriceTime = now;
 
       if (this.rebalanceConfig.log_every_trade) {
-        this.log(
-          `[${this.getShortName(marketType)}] Signal: ${rebalanceSignal.side} ${rebalanceSignal.size.toFixed(2)} @ $${rebalanceSignal.price.toFixed(4)}`
-        );
+        for (const signal of signals) {
+          this.log(
+            `[${this.getShortName(marketType)}] Signal: ${signal.side} ${signal.size.toFixed(2)} @ $${signal.price.toFixed(4)} (${(signal.metadata as any)?.outcome})`
+          );
+        }
       }
     }
 
-    return rebalanceSignal;
+    return signals;
   }
 
   /**
@@ -379,276 +364,135 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
     }
   }
 
-  private checkPriceMoveThreshold(state: MarketState, currentPrice: number): boolean {
-    if (state.lastPrice === null) {
-      return true;
-    }
-
-    const priceChange = Math.abs((currentPrice - state.lastPrice) / state.lastPrice);
-    return priceChange >= this.rebalanceConfig.price_move_threshold;
-  }
-
-  private canTrade(currentYesRatio: number): boolean {
-    const targetRatio = this.rebalanceConfig.target_yes_ratio;
-
-    const yesNoRatio = currentYesRatio / (1 - currentYesRatio + 0.0001);
-    const noYesRatio = (1 - currentYesRatio) / (currentYesRatio + 0.0001);
-
-    if (
-      yesNoRatio > this.rebalanceConfig.max_inventory_imbalance_ratio ||
-      noYesRatio > this.rebalanceConfig.max_inventory_imbalance_ratio
-    ) {
-      if (this.rebalanceConfig.reduce_only_mode) {
-        return true;
-      }
-      const stopAddThreshold = this.rebalanceConfig.stop_add_threshold;
-      const imbalanceRatio = Math.max(yesNoRatio, noYesRatio);
-      const thresholdRatio = this.rebalanceConfig.max_inventory_imbalance_ratio * stopAddThreshold;
-
-      if (imbalanceRatio > thresholdRatio) {
-        return false;
-      }
-    }
-
-    return true;
-  }
-
-  private calculateRebalanceSignal(
+  /**
+   * RATIO-WEIGHTED DUAL-SIDE TRADING: Trade both sides weighted by inventory needs
+   * Trade sizing formula: $0.75 + (price × 10), clamped to $0.01-$26.00
+   *
+   * Strategy:
+   * - Calculate base trade size for each side using the formula
+   * - Weight trades based on how far inventory is from target ratio
+   * - Side with less inventory gets traded more aggressively
+   * - Can skip a side if it's already overweight (above target ratio)
+   */
+  private calculateDualSideSignals(
     state: MarketState,
     inventory: { yesSize: number; noSize: number; yesValue: number; noValue: number },
     yesPrice: number,
     noPrice: number,
     currentYesRatio: number,
     targetRatio: number
-  ): TradeSignal | null {
+  ): TradeSignal[] {
     const { market, yesTokenId, noTokenId, marketType } = state;
+    const signals: TradeSignal[] = [];
 
-    // Calculate per-market bankroll (divide total by 4 markets)
-    const perMarketBankroll = this.rebalanceConfig.bankroll_total / 4;
-    const totalValue = inventory.yesValue + inventory.noValue + this.balance;
-    const availableBankroll = Math.min(totalValue, perMarketBankroll);
-
-    const targetYesValue = availableBankroll * targetRatio;
-    const targetNoValue = availableBankroll * (1 - targetRatio);
-
-    const yesDeviation = inventory.yesValue - targetYesValue;
-    const noDeviation = inventory.noValue - targetNoValue;
-
-    // Handle initial trade case - use price-based sizing: $1 + (price × $11)
-    const hasNoInventory = inventory.yesValue === 0 && inventory.noValue === 0;
-    if (hasNoInventory && this.balance > 0) {
-      const shouldBuyYes = state.lastTradePrices.length % 2 === 0;
-
-      if (shouldBuyYes) {
-        const buyAmount = this.calculateTradeSize(yesPrice);
-        if (buyAmount >= this.rebalanceConfig.min_trade_size && this.balance >= buyAmount) {
-          const tradeSize = buyAmount / yesPrice;
-          const tradePrice = this.calculateOrderPrice(yesPrice, "BUY");
-          return this.createBuySignal(market, yesTokenId, tradePrice, Math.floor(tradeSize * 100) / 100, {
-            rebalance: true,
-            initialTrade: true,
-            currentYesRatio,
-            targetRatio,
-            outcome: "Up",
-            marketType,
-          });
-        }
-      } else {
-        const buyAmount = this.calculateTradeSize(noPrice);
-        if (buyAmount >= this.rebalanceConfig.min_trade_size && this.balance >= buyAmount) {
-          const tradeSize = buyAmount / noPrice;
-          const tradePrice = this.calculateOrderPrice(noPrice, "BUY");
-          return this.createBuySignal(market, noTokenId, tradePrice, Math.floor(tradeSize * 100) / 100, {
-            rebalance: true,
-            initialTrade: true,
-            currentYesRatio,
-            targetRatio,
-            outcome: "Down",
-            marketType,
-          });
-        }
-      }
+    // Check if we have enough balance
+    if (this.balance < this.rebalanceConfig.min_trade_size) {
+      return signals;
     }
 
-    // Handle unbalanced initial inventory - use price-based sizing
-    const hasOnlyYes = inventory.yesValue > 0 && inventory.noValue === 0;
-    const hasOnlyNo = inventory.noValue > 0 && inventory.yesValue === 0;
+    // Calculate base trade sizes using formula: base + (price × multiplier)
+    const baseUpAmount = this.calculateTradeSize(yesPrice);
+    const baseDownAmount = this.calculateTradeSize(noPrice);
 
-    if (hasOnlyYes && this.balance > 0) {
-      const buyAmount = this.calculateTradeSize(noPrice);
-      if (buyAmount >= this.rebalanceConfig.min_trade_size && this.balance >= buyAmount) {
-        const tradeSize = buyAmount / noPrice;
-        const tradePrice = this.calculateOrderPrice(noPrice, "BUY");
-        return this.createBuySignal(market, noTokenId, tradePrice, Math.floor(tradeSize * 100) / 100, {
-          rebalance: true,
-          balancingTrade: true,
-          currentYesRatio,
-          targetRatio,
-          outcome: "Down",
-          marketType,
-        });
-      }
+    const totalInventory = inventory.yesValue + inventory.noValue;
+
+    // Calculate how much each side deviates from target
+    // If target is 0.5 (50/50), and current YES is 0.7 (70%), YES is +0.2 overweight
+    // Negative means underweight (needs more), positive means overweight (skip or reduce)
+    let yesDeviation = 0;
+    let noDeviation = 0;
+
+    if (totalInventory > 0) {
+      yesDeviation = currentYesRatio - targetRatio;  // Positive = overweight
+      noDeviation = (1 - currentYesRatio) - (1 - targetRatio);  // Positive = overweight
     }
 
-    if (hasOnlyNo && this.balance > 0) {
-      const buyAmount = this.calculateTradeSize(yesPrice);
-      if (buyAmount >= this.rebalanceConfig.min_trade_size && this.balance >= buyAmount) {
-        const tradeSize = buyAmount / yesPrice;
+    // Calculate weight multipliers based on deviation
+    // Underweight side gets full weight (1.0), overweight gets reduced (can be 0)
+    // Weight = 1 - (deviation / max_skew_ratio), clamped 0-1
+    const maxSkew = this.rebalanceConfig.max_skew_ratio;
+
+    // YES weight: if underweight (negative deviation), weight = 1.0
+    // If overweight, reduce weight proportionally
+    const yesWeight = Math.max(0, Math.min(1, 1 - (yesDeviation / maxSkew)));
+    const noWeight = Math.max(0, Math.min(1, 1 - (noDeviation / maxSkew)));
+
+    // Apply weights to trade amounts
+    const upTradeAmount = baseUpAmount * yesWeight;
+    const downTradeAmount = baseDownAmount * noWeight;
+
+    let remainingBalance = this.balance;
+
+    // Generate UP (YES) signal if weighted amount is sufficient
+    if (upTradeAmount >= this.rebalanceConfig.min_trade_size && remainingBalance >= upTradeAmount) {
+      const tradeSize = upTradeAmount / yesPrice;
+      if (tradeSize >= 0.01) {
         const tradePrice = this.calculateOrderPrice(yesPrice, "BUY");
-        return this.createBuySignal(market, yesTokenId, tradePrice, Math.floor(tradeSize * 100) / 100, {
+        signals.push(this.createBuySignal(market, yesTokenId, tradePrice, Math.floor(tradeSize * 100) / 100, {
           rebalance: true,
-          balancingTrade: true,
+          dualSideTrade: true,
+          weight: yesWeight,
           currentYesRatio,
           targetRatio,
           outcome: "Up",
           marketType,
-        });
+        }));
+        remainingBalance -= upTradeAmount;
       }
     }
 
-    // Determine which side to trade
-    let tradeSide: "BUY" | "SELL" | null = null;
-    let tradeTokenId: string | null = null;
-    let tradePrice: number = 0;
-    let tradeSize: number = 0;
+    // Generate DOWN (NO) signal if weighted amount is sufficient
+    if (downTradeAmount >= this.rebalanceConfig.min_trade_size && remainingBalance >= downTradeAmount) {
+      const tradeSize = downTradeAmount / noPrice;
+      if (tradeSize >= 0.01) {
+        const tradePrice = this.calculateOrderPrice(noPrice, "BUY");
+        signals.push(this.createBuySignal(market, noTokenId, tradePrice, Math.floor(tradeSize * 100) / 100, {
+          rebalance: true,
+          dualSideTrade: true,
+          weight: noWeight,
+          currentYesRatio,
+          targetRatio,
+          outcome: "Down",
+          marketType,
+        }));
+      }
+    }
 
-    const strength = state.flipDetected
-      ? this.rebalanceConfig.rebalance_strength_k * this.rebalanceConfig.flip_response_multiplier
-      : this.rebalanceConfig.rebalance_strength_k;
+    // If no trades due to weighting, but we have balance and one side is very underweight
+    // Force a trade on the underweight side to maintain some inventory balance
+    if (signals.length === 0 && this.balance >= this.rebalanceConfig.min_trade_size) {
+      const buyYes = inventory.yesValue <= inventory.noValue;
 
-    // DUAL-SIDE TRADING: Buy the WINNING side (higher price = more likely to win)
-    // This ensures we're always accumulating on the side that's currently favored
-    if (this.balance > 0) {
-      // Buy the side with the HIGHER price - that's the winning/favored side
-      const buyYes = yesPrice >= noPrice;
-
-      if (buyYes) {
-        // Buy UP (YES) - use UP price for sizing
-        const tradeAmount = this.calculateTradeSize(yesPrice);
-        if (tradeAmount >= this.rebalanceConfig.min_trade_size && this.balance >= tradeAmount) {
-          tradeSize = tradeAmount / yesPrice;
-          tradeSide = "BUY";
-          tradeTokenId = yesTokenId;
-          tradePrice = this.calculateOrderPrice(yesPrice, "BUY");
-
-          if (tradeSize >= 0.01) {
-            tradeSize = Math.floor(tradeSize * 100) / 100;
-            return this.createBuySignal(market, tradeTokenId, tradePrice, tradeSize, {
-              rebalance: true,
-              continuousTrade: true,
-              currentYesRatio,
-              targetRatio,
-              outcome: "Up",
-              marketType,
-            });
-          }
+      if (buyYes && baseUpAmount >= this.rebalanceConfig.min_trade_size && this.balance >= baseUpAmount) {
+        const tradeSize = baseUpAmount / yesPrice;
+        if (tradeSize >= 0.01) {
+          const tradePrice = this.calculateOrderPrice(yesPrice, "BUY");
+          signals.push(this.createBuySignal(market, yesTokenId, tradePrice, Math.floor(tradeSize * 100) / 100, {
+            rebalance: true,
+            fallbackTrade: true,
+            currentYesRatio,
+            targetRatio,
+            outcome: "Up",
+            marketType,
+          }));
         }
-      } else {
-        // Buy DOWN (NO) - use DOWN price for sizing
-        const tradeAmount = this.calculateTradeSize(noPrice);
-        if (tradeAmount >= this.rebalanceConfig.min_trade_size && this.balance >= tradeAmount) {
-          tradeSize = tradeAmount / noPrice;
-          tradeSide = "BUY";
-          tradeTokenId = noTokenId;
-          tradePrice = this.calculateOrderPrice(noPrice, "BUY");
-
-          if (tradeSize >= 0.01) {
-            tradeSize = Math.floor(tradeSize * 100) / 100;
-            return this.createBuySignal(market, tradeTokenId, tradePrice, tradeSize, {
-              rebalance: true,
-              continuousTrade: true,
-              currentYesRatio,
-              targetRatio,
-              outcome: "Down",
-              marketType,
-            });
-          }
+      } else if (!buyYes && baseDownAmount >= this.rebalanceConfig.min_trade_size && this.balance >= baseDownAmount) {
+        const tradeSize = baseDownAmount / noPrice;
+        if (tradeSize >= 0.01) {
+          const tradePrice = this.calculateOrderPrice(noPrice, "BUY");
+          signals.push(this.createBuySignal(market, noTokenId, tradePrice, Math.floor(tradeSize * 100) / 100, {
+            rebalance: true,
+            fallbackTrade: true,
+            currentYesRatio,
+            targetRatio,
+            outcome: "Down",
+            marketType,
+          }));
         }
       }
     }
 
-    // Determine which side needs rebalancing more
-    if (Math.abs(yesDeviation) > Math.abs(noDeviation)) {
-      const rebalanceAmount = this.calculateTradeSize(yesPrice);
-      tradeSize = rebalanceAmount / yesPrice;
-
-      if (rebalanceAmount < this.rebalanceConfig.min_trade_size) {
-        return null;
-      }
-
-      if (yesDeviation > 0) {
-        tradeSide = "SELL";
-        tradeTokenId = yesTokenId;
-        tradePrice = this.calculateOrderPrice(yesPrice, "SELL");
-        if (inventory.yesSize < tradeSize) {
-          tradeSize = inventory.yesSize;
-        }
-      } else {
-        tradeSide = "BUY";
-        tradeTokenId = yesTokenId;
-        tradePrice = this.calculateOrderPrice(yesPrice, "BUY");
-      }
-    } else {
-      const rebalanceAmount = this.calculateTradeSize(noPrice);
-      tradeSize = rebalanceAmount / noPrice;
-
-      if (rebalanceAmount < this.rebalanceConfig.min_trade_size) {
-        return null;
-      }
-
-      if (noDeviation > 0) {
-        tradeSide = "SELL";
-        tradeTokenId = noTokenId;
-        tradePrice = this.calculateOrderPrice(noPrice, "SELL");
-        if (inventory.noSize < tradeSize) {
-          tradeSize = inventory.noSize;
-        }
-      } else {
-        tradeSide = "BUY";
-        tradeTokenId = noTokenId;
-        tradePrice = this.calculateOrderPrice(noPrice, "BUY");
-      }
-    }
-
-    if (!tradeSide || !tradeTokenId || tradeSize < 0.01) {
-      return null;
-    }
-
-    // Apply reduce-only mode if needed
-    if (this.rebalanceConfig.reduce_only_mode) {
-      const yesNoRatio = inventory.yesValue / (inventory.noValue + 0.0001);
-      const noYesRatio = inventory.noValue / (inventory.yesValue + 0.0001);
-      const maxRatio = this.rebalanceConfig.max_inventory_imbalance_ratio;
-
-      if (yesNoRatio > maxRatio) {
-        if (tradeTokenId === yesTokenId && tradeSide === "BUY") return null;
-        if (tradeTokenId === noTokenId && tradeSide === "SELL") return null;
-      } else if (noYesRatio > maxRatio) {
-        if (tradeTokenId === noTokenId && tradeSide === "BUY") return null;
-        if (tradeTokenId === yesTokenId && tradeSide === "SELL") return null;
-      }
-    }
-
-    tradeSize = Math.floor(tradeSize * 100) / 100;
-    const outcome = tradeTokenId === yesTokenId ? "Up" : "Down";
-
-    if (tradeSide === "BUY") {
-      return this.createBuySignal(market, tradeTokenId, tradePrice, tradeSize, {
-        rebalance: true,
-        currentYesRatio,
-        targetRatio,
-        outcome,
-        marketType,
-      });
-    } else {
-      return this.createSellSignal(market, tradeTokenId, tradePrice, tradeSize, {
-        rebalance: true,
-        currentYesRatio,
-        targetRatio,
-        outcome,
-        marketType,
-      });
-    }
+    return signals;
   }
 
   private calculateOrderPrice(midPrice: number, side: "BUY" | "SELL"): number {

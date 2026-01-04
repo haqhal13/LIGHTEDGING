@@ -74,20 +74,20 @@ use_price_based_sizing: true
 # Formula: trade_size = sizing_base + (price × sizing_price_multiplier)
 # Options: true or false
 
-sizing_base: 1.0
+sizing_base: 0.75
 # Base amount in $ added to every trade (e.g. 0.50-5.00)
 # This is the minimum you'll trade regardless of price
-# Example: 1.0 = always add at least $1 base
+# Example: 0.75 = always add at least $0.75 base
 
-sizing_price_multiplier: 11.0
+sizing_price_multiplier: 10.0
 # How much to scale trade size per unit of price (e.g. 5.0-20.0)
 # Higher = bigger trades at higher prices (more confident bets)
-# Example: 11.0 means at price 0.50, add $5.50 to base
+# Example: 10.0 means at price 0.50, add $5.00 to base
 #
-# SIZING EXAMPLES with base=1, multiplier=11:
-#   Price 0.15 (cheap)     → $1 + ($0.15 × 11) = $2.65
-#   Price 0.50 (mid)       → $1 + ($0.50 × 11) = $6.50
-#   Price 0.80 (expensive) → $1 + ($0.80 × 11) = $9.80
+# SIZING EXAMPLES with base=0.75, multiplier=10:
+#   Price 0.20 (cheap)     → $0.75 + ($0.20 × 10) = $2.75
+#   Price 0.50 (mid)       → $0.75 + ($0.50 × 10) = $5.75
+#   Price 0.80 (expensive) → $0.75 + ($0.80 × 10) = $8.75
 
 # ----------------------------------------------------------------------------
 # 4. PRICE / EXECUTION SAFETY (avoid bad fills)
