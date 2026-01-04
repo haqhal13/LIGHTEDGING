@@ -1,0 +1,165 @@
+# ============================================================================
+# INVENTORY-BALANCED REBALANCING STRATEGY CONFIGURATION
+# ============================================================================
+# This file controls the Market-Maker Style rebalancing strategy.
+# Edit the values below to tune your bot's behavior.
+# Save the file and restart the bot to apply changes.
+#
+# TIP: Start with conservative values and gradually adjust based on results.
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# 1. BANKROLL & ALLOCATION
+# ----------------------------------------------------------------------------
+bankroll_total: 8000.0
+# Total $ you allow the strategy to use (hard cap)
+# Example: 8000.0 means the strategy can use up to $8000
+
+target_yes_ratio: 0.5
+# Your "neutral" inventory split (between 0 and 1)
+# Example: 0.5 = $4000 YES / $4000 NO (balanced)
+# Example: 0.6 = $4800 YES / $3200 NO (slightly bullish)
+
+max_skew_ratio: 0.20
+# Maximum allowed lean away from target (between 0 and 1)
+# Limits how much you can over-commit to one side
+# Example: 0.20 with target_yes_ratio=0.5 means max YES=0.70, min YES=0.30
+
+# ----------------------------------------------------------------------------
+# 2. REBALANCE TRIGGER (when to trade)
+# ----------------------------------------------------------------------------
+rebalance_band: 0.005
+# How far inventory can drift from target before rebalancing (e.g. 0.02-0.10)
+# Bigger band = fewer trades, slower response
+# Example: 0.05 with target_yes_ratio=0.5 means rebalance when YES ratio < 0.45 or > 0.55
+
+price_move_threshold: 0.002
+# Only rebalance if price moved enough since last action (e.g. 0.005-0.02)
+# Prevents tiny "noise" trades when price barely moves
+# Example: 0.01 = only trade if price moved by at least 1%
+
+min_seconds_between_rebalances: 1
+# Cooldown between adjustments in seconds (e.g. 1-60)
+# Reduces churn; too high can miss flips
+# Example: 1 = trade every second for fastest price following
+
+# ----------------------------------------------------------------------------
+# 3. REBALANCE STRENGTH (how much to trade)
+# ----------------------------------------------------------------------------
+rebalance_strength_k: 0.8
+# How aggressively you push back to target (e.g. 0.1-2.0)
+# Higher = faster snap-back, more churn/slippage risk
+# Example: 0.8 = move 80% of the way to target in one step
+
+max_rebalance_step_pct: 0.25
+# Max % of bankroll you'll move in one rebalance step (e.g. 0.05-0.50)
+# Prevents huge single jumps
+# Example: 0.25 = move up to 25% of $8000 = $2000 per rebalance
+
+min_trade_size: 0.01
+# Minimum trade size in $ (e.g. 0.01-1.00)
+# Trades smaller than this are skipped
+# Example: 0.01 = allow trades as small as 1 cent
+
+max_trade_size: 26.0
+# Hard cap per order in $ (e.g. 10-50)
+# Used when price-based sizing is enabled to cap maximum
+# Example: 26 = never trade more than $26 per order (matches your analyzed data)
+
+# ----------------------------------------------------------------------------
+# 3b. PRICE-BASED TRADE SIZING (optional - scales with price)
+# ----------------------------------------------------------------------------
+use_price_based_sizing: true
+# Enable dynamic sizing based on price (overrides min/max_trade_size)
+# Formula: trade_size = sizing_base + (price × sizing_price_multiplier)
+# Options: true or false
+
+sizing_base: 1.0
+# Base amount in $ added to every trade (e.g. 0.50-5.00)
+# This is the minimum you'll trade regardless of price
+# Example: 1.0 = always add at least $1 base
+
+sizing_price_multiplier: 11.0
+# How much to scale trade size per unit of price (e.g. 5.0-20.0)
+# Higher = bigger trades at higher prices (more confident bets)
+# Example: 11.0 means at price 0.50, add $5.50 to base
+#
+# SIZING EXAMPLES with base=1, multiplier=11:
+#   Price 0.15 (cheap)     → $1 + ($0.15 × 11) = $2.65
+#   Price 0.50 (mid)       → $1 + ($0.50 × 11) = $6.50
+#   Price 0.80 (expensive) → $1 + ($0.80 × 11) = $9.80
+
+# ----------------------------------------------------------------------------
+# 4. PRICE / EXECUTION SAFETY (avoid bad fills)
+# ----------------------------------------------------------------------------
+slippage_buffer: 0.005
+# Extra "worst-case" price padding you assume before trading (e.g. 0.002-0.02)
+# Safer but fewer fills
+# Example: 0.005 = assume 0.5% worse price when calculating trade size
+
+order_type: "limit"
+# Order type: "limit" or "market"
+# Limit = safer fills (slower). Market = faster (riskier)
+# Recommended: "limit" for safety
+
+limit_price_offset: 0.003
+# How far inside/outside mid you place limits (e.g. 0.001-0.01)
+# Smaller = better price, slower fills
+# Example: 0.003 = place limit orders 0.3% from mid price
+
+max_unfilled_time_sec: 60
+# Cancel/replace stale orders after this many seconds (e.g. 10-120)
+# Allows quick re-entry when market flips
+# Example: 60 = cancel orders that haven't filled in 60 seconds
+
+# ----------------------------------------------------------------------------
+# 5. INVENTORY RISK CONTROLS (the "safest" part)
+# ----------------------------------------------------------------------------
+max_inventory_imbalance_ratio: 1.5
+# Limits how lopsided you're allowed to get (e.g. 1.1-2.0)
+# Core safety for fast recovery on reversals
+# Example: 1.5 = max YES/NO ratio of 1.5:1 (or 1:1.5)
+
+stop_add_threshold: 0.80
+# When you approach the imbalance limit, stop adding to heavy side (0-1)
+# Expressed as fraction of max_inventory_imbalance_ratio
+# Example: 0.80 = stop adding when you reach 80% of max imbalance
+
+reduce_only_mode: false
+# If true, once too imbalanced you only trade to reduce risk
+# Helps "reclaim small profit" without blowing up
+# Options: true or false
+
+# ----------------------------------------------------------------------------
+# 6. REVERSAL HANDLING (so you can flip 60/40 → 40/60)
+# ----------------------------------------------------------------------------
+flip_detection_window_sec: 30
+# How quickly you decide momentum/price direction changed (e.g. 10-60)
+# Example: 30 = look at last 30 seconds of price movement
+
+flip_response_multiplier: 1.5
+# Boosts rebalance_strength temporarily after detected flip (e.g. 1.0-3.0)
+# Faster recovery after market flips
+# Example: 1.5 = use 1.5x normal rebalance strength after flip
+
+post_flip_cooldown_sec: 15
+# Short pause after flipping to avoid overreacting twice (e.g. 0-30)
+# Example: 15 = wait 15 seconds after flip detection before trading again
+
+# ----------------------------------------------------------------------------
+# 7. LOGGING / TUNING HELPERS (so trial & error is easier)
+# ----------------------------------------------------------------------------
+log_every_trade: true
+# Record each action (needed to see why performance differs)
+# Options: true or false
+
+metrics_window_trades: 100
+# How many recent trades to use when judging "is this setting good?" (e.g. 50-500)
+# Example: 100 = analyze last 100 trades for performance metrics
+
+# ----------------------------------------------------------------------------
+# MARKET CONFIGURATION
+# ----------------------------------------------------------------------------
+market_condition_id: ""
+# Leave empty to use the first active market, or specify a condition ID
+# Example: "0x1234567890abcdef..."
