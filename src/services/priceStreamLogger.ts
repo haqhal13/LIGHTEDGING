@@ -12,6 +12,7 @@ import WebSocket from 'ws';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getRunId } from '../utils/runId';
+import { MarketDiscoveryService, MarketInfo, MarketToken } from './MarketDiscoveryService';
 
 // ============================================================================
 // Configuration
@@ -106,47 +107,7 @@ interface AssetState {
   marketConditionId: string | null;
 }
 
-interface MarketToken {
-  token_id: string;
-  outcome: string;
-  winner?: boolean;
-}
-
-interface MarketInfo {
-  condition_id: string;
-  slug: string;
-  question: string;
-  end_date_iso: string;
-  start_time_iso: string;
-  tokens: MarketToken[];
-  closed: boolean;
-  active: boolean;
-  market_type: string;
-}
-
-interface GammaEvent {
-  id: string;
-  slug: string;
-  title: string;
-  endDate: string;
-  startTime: string | null;
-  closed: boolean;
-  active: boolean;
-  markets: GammaMarket[];
-}
-
-interface GammaMarket {
-  id: string;
-  conditionId: string;
-  slug: string;
-  question: string;
-  endDate: string;
-  eventStartTime: string | null;
-  closed: boolean;
-  active: boolean;
-  clobTokenIds: string;
-  outcomes: string;
-}
+// MarketToken and MarketInfo are imported from MarketDiscoveryService
 
 // CSV Row format matching your existing structure
 interface CSVRow {
@@ -215,267 +176,9 @@ function normalizeTimestamp(ts: number): number {
 }
 
 // ============================================================================
-// Market Discovery
+// Market Discovery - Now using shared MarketDiscoveryService
 // ============================================================================
-
-class MarketDiscovery {
-  private currentMarkets: Map<string, MarketInfo> = new Map();
-  private nextMarkets: Map<string, MarketInfo> = new Map();
-
-  async fetchAllMarkets(): Promise<MarketInfo[]> {
-    try {
-      const allMarkets: MarketInfo[] = [];
-
-      // Fetch hourly markets from tag_slug
-      const hourlyUrl = `${CONFIG.GAMMA_API_URL}?tag_slug=up-or-down&active=true&closed=false&limit=100&order=endDate&ascending=true`;
-      const hourlyMarkets = await this.fetchMarketsFromUrl(hourlyUrl);
-      allMarkets.push(...hourlyMarkets);
-
-      // Also fetch hourly markets by slug prefix (backup - API sometimes misses some)
-      for (const hourlyPrefix of ['bitcoin-up-or-down', 'ethereum-up-or-down']) {
-        const hourlyPrefixUrl = `${CONFIG.GAMMA_API_URL}?slug_contains=${hourlyPrefix}&active=true&closed=false&limit=20`;
-        const prefixMarkets = await this.fetchMarketsFromUrl(hourlyPrefixUrl);
-        allMarkets.push(...prefixMarkets);
-      }
-
-      // Fetch 15m markets
-      for (const prefix of ['btc-updown-15m', 'eth-updown-15m']) {
-        const now = Math.floor(Date.now() / 1000);
-        for (let offset = -1; offset <= 8; offset++) {
-          const targetTime = now + (offset * 900);
-          const roundedTime = Math.floor(targetTime / 900) * 900;
-          const slug = `${prefix}-${roundedTime}`;
-          const marketUrl = `${CONFIG.GAMMA_API_URL}?slug=${slug}`;
-          const markets = await this.fetchMarketsFromUrl(marketUrl);
-          allMarkets.push(...markets);
-        }
-      }
-
-      // Deduplicate
-      const uniqueMarkets = new Map<string, MarketInfo>();
-      for (const market of allMarkets) {
-        if (!uniqueMarkets.has(market.condition_id)) {
-          uniqueMarkets.set(market.condition_id, market);
-        }
-      }
-
-      const markets = Array.from(uniqueMarkets.values());
-      markets.sort((a, b) => new Date(a.end_date_iso).getTime() - new Date(b.end_date_iso).getTime());
-
-      return markets;
-    } catch (error) {
-      log('error', 'Failed to fetch markets:', error);
-      return [];
-    }
-  }
-
-  private async fetchMarketsFromUrl(url: string): Promise<MarketInfo[]> {
-    try {
-      const response = await fetch(url);
-      if (!response.ok) return [];
-
-      const events = (await response.json()) as GammaEvent[];
-      const markets: MarketInfo[] = [];
-
-      for (const event of events) {
-        const marketType = CONFIG.MARKET_SLUG_PREFIXES.find(prefix => event.slug.startsWith(prefix));
-        if (!marketType) continue;
-
-        for (const market of event.markets) {
-          let tokenIds: string[] = [];
-          let outcomeNames: string[] = [];
-
-          try {
-            if (market.clobTokenIds) tokenIds = JSON.parse(market.clobTokenIds) as string[];
-            if (market.outcomes) outcomeNames = JSON.parse(market.outcomes) as string[];
-          } catch {
-            continue;
-          }
-
-          if (tokenIds.length >= 2) {
-            const tokens: MarketToken[] = tokenIds.map((tokenId: string, idx: number) => ({
-              token_id: tokenId,
-              outcome: outcomeNames[idx] || (idx === 0 ? 'Up' : 'Down'),
-            }));
-
-            const startTime = event.startTime || market.eventStartTime || market.endDate;
-
-            markets.push({
-              condition_id: market.conditionId,
-              slug: market.slug || event.slug,
-              question: market.question || event.title,
-              end_date_iso: market.endDate || event.endDate,
-              start_time_iso: startTime,
-              tokens,
-              closed: market.closed || event.closed,
-              active: market.active && event.active,
-              market_type: marketType,
-            });
-          }
-        }
-      }
-
-      return markets;
-    } catch {
-      return [];
-    }
-  }
-
-  async findCurrentMarketsForAllTypes(): Promise<Map<string, MarketInfo>> {
-    // Retry up to 3 times if not all markets found
-    const maxRetries = 3;
-
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      const allMarkets = await this.fetchAllMarkets();
-      const now = Date.now();
-
-      this.currentMarkets.clear();
-      this.nextMarkets.clear();
-
-      const marketsByType = new Map<string, MarketInfo[]>();
-      for (const market of allMarkets) {
-        if (!marketsByType.has(market.market_type)) {
-          marketsByType.set(market.market_type, []);
-        }
-        marketsByType.get(market.market_type)!.push(market);
-      }
-
-      for (const marketType of CONFIG.MARKET_SLUG_PREFIXES) {
-        const markets = marketsByType.get(marketType) || [];
-        let current: MarketInfo | null = null;
-        let next: MarketInfo | null = null;
-
-        // Add 1 second buffer for boundary timing issues
-        const nowWithBuffer = now + 1000;
-
-        for (const market of markets) {
-          const startTime = new Date(market.start_time_iso).getTime();
-          const endTime = new Date(market.end_date_iso).getTime();
-
-          // Market hasn't ended yet (with small buffer for exact boundary)
-          if (endTime > now) {
-            // Market has started (or is about to start within 1 second)
-            if (startTime <= nowWithBuffer) {
-              if (!current) {
-                current = market;
-              } else {
-                // If we already have a current, prefer the one that started earlier (closer to now)
-                const currentStart = new Date(current.start_time_iso).getTime();
-                if (startTime > currentStart && startTime <= now) {
-                  // This market started more recently but is still active - use it
-                  current = market;
-                }
-              }
-            } else {
-              // Market hasn't started yet - it's a future market
-              if (current && !next) {
-                next = market;
-              } else if (!current) {
-                // No current market found - use future market as fallback
-                current = market;
-                const secsUntilStart = Math.round((startTime - now) / 1000);
-                log('warn', `[${marketType}] Using FUTURE market as current (starts in ${secsUntilStart}s): ${market.question}`);
-              }
-            }
-          }
-        }
-
-        if (current) {
-          this.currentMarkets.set(marketType, current);
-          const startTime = new Date(current.start_time_iso).getTime();
-          const endTime = new Date(current.end_date_iso).getTime();
-          const secsLeft = Math.round((endTime - now) / 1000);
-          const hasStarted = startTime <= now;
-          log('info', `[${marketType}] Current: ${current.question} (${hasStarted ? secsLeft + 's left' : 'NOT STARTED'})`);
-        }
-        if (next) {
-          this.nextMarkets.set(marketType, next);
-        }
-      }
-
-      // Check if all 4 market types found
-      if (this.currentMarkets.size >= 4) {
-        log('info', `All ${this.currentMarkets.size} markets discovered on attempt ${attempt}`);
-        return this.currentMarkets;
-      }
-
-      // Retry if not all markets found
-      if (attempt < maxRetries) {
-        const missing = CONFIG.MARKET_SLUG_PREFIXES.filter(t => !this.currentMarkets.has(t));
-        log('warn', `Only ${this.currentMarkets.size}/4 markets found (missing: ${missing.join(', ')}). Retrying in 2s... (attempt ${attempt}/${maxRetries})`);
-        await new Promise(resolve => setTimeout(resolve, 2000));
-      }
-    }
-
-    log('warn', `Could only find ${this.currentMarkets.size}/4 markets after ${maxRetries} attempts`);
-    return this.currentMarkets;
-  }
-
-  getCurrentMarkets(): Map<string, MarketInfo> {
-    return this.currentMarkets;
-  }
-
-  getAllAssetIds(): string[] {
-    const assetIds: string[] = [];
-    Array.from(this.currentMarkets.values()).forEach(market => {
-      for (const token of market.tokens) {
-        assetIds.push(token.token_id);
-      }
-    });
-    return assetIds;
-  }
-
-  getMarketByAssetId(assetId: string): MarketInfo | null {
-    const markets = Array.from(this.currentMarkets.values());
-    for (const market of markets) {
-      if (market.tokens.some(t => t.token_id === assetId)) {
-        return market;
-      }
-    }
-    return null;
-  }
-
-  getMarketTypesNeedingSwitch(): string[] {
-    const now = Date.now();
-    const needsSwitch: string[] = [];
-    Array.from(this.currentMarkets.entries()).forEach(([marketType, market]) => {
-      const endTime = new Date(market.end_date_iso).getTime();
-      const timeLeft = endTime - now;
-      if (timeLeft < CONFIG.MARKET_SWITCH_BUFFER_MS || timeLeft < 0) {
-        needsSwitch.push(marketType);
-      }
-    });
-    return needsSwitch;
-  }
-
-  hasAnyMarketEnded(): boolean {
-    const now = Date.now();
-    const markets = Array.from(this.currentMarkets.values());
-    for (const market of markets) {
-      const endTime = new Date(market.end_date_iso).getTime();
-      const timeLeft = endTime - now;
-
-      // Market has ended
-      if (now > endTime) return true;
-
-      // Sanity check: 15-minute markets should never have more than 16 minutes left
-      // If they do, the market data is stale and needs refresh
-      const is15Min = market.market_type.includes('15m');
-      if (is15Min && timeLeft > 16 * 60 * 1000) {
-        log('warn', `[${market.market_type}] Stale market detected (${Math.floor(timeLeft / 60000)}m left for 15m market)`);
-        return true;
-      }
-
-      // Same for hourly markets - shouldn't have more than 61 minutes left
-      const is1Hour = market.market_type.includes('up-or-down');
-      if (is1Hour && timeLeft > 61 * 60 * 1000) {
-        log('warn', `[${market.market_type}] Stale market detected (${Math.floor(timeLeft / 60000)}m left for 1h market)`);
-        return true;
-      }
-    }
-    return false;
-  }
-}
+// MarketDiscoveryService is imported from ./MarketDiscoveryService
 
 // ============================================================================
 // CSV Writer - Compatible with existing format
@@ -691,7 +394,7 @@ class PriceStreamLogger {
   private ws: WebSocket | null = null;
   private assetStates: Map<string, AssetState> = new Map();
   private writers: Map<string, CSVWriter> = new Map();
-  private marketDiscovery: MarketDiscovery;
+  private marketDiscovery: MarketDiscoveryService;
   private reconnectAttempts = 0;
   private reconnectTimeout: NodeJS.Timeout | null = null;
   private pingInterval: NodeJS.Timeout | null = null;
@@ -710,7 +413,7 @@ class PriceStreamLogger {
   private maxPriceHistorySize = 600;
 
   constructor() {
-    this.marketDiscovery = new MarketDiscovery();
+    this.marketDiscovery = new MarketDiscoveryService();
 
     const logsDir = path.join(process.cwd(), 'logs');
     const livePricesDir = path.join(logsDir, 'Live prices');
