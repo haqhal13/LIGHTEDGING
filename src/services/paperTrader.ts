@@ -17,7 +17,9 @@ export class PaperTrader {
   private account: PaperAccount;
   private marketData: MarketDataService;
   private csvFilePath: string;
+  private profitCsvPath: string;
   private csvInitialized: boolean = false;
+  private profitCsvInitialized: boolean = false;
 
   constructor(marketData: MarketDataService, startingBalance?: number) {
     this.marketData = marketData;
@@ -40,7 +42,9 @@ export class PaperTrader {
     }
     const runId = getRunId();
     this.csvFilePath = path.join(paperDir, `Paper Trades_${runId}.csv`);
+    this.profitCsvPath = path.join(paperDir, `PROFITS_${runId}.csv`);
     this.initializeCsv();
+    this.initializeProfitCsv();
 
     logger.paper(`Paper account initialized with $${this.account.balance} USDC`);
   }
@@ -70,6 +74,104 @@ export class PaperTrader {
       logger.info(`Paper trades CSV initialized: ${this.csvFilePath}`);
     } catch (error) {
       logger.error(`Failed to initialize paper trades CSV: ${error}`);
+    }
+  }
+
+  private initializeProfitCsv(): void {
+    try {
+      // Simple headers: Time, Market, PnL
+      const headers = ["Time", "Market", "PnL"].join(",");
+      fs.writeFileSync(this.profitCsvPath, headers + "\n", "utf8");
+      this.profitCsvInitialized = true;
+      logger.info(`Profit summary CSV initialized: ${this.profitCsvPath}`);
+    } catch (error) {
+      logger.error(`Failed to initialize profit CSV: ${error}`);
+    }
+  }
+
+  /**
+   * Log a realized profit/loss to the PROFITS CSV
+   * Called when a position is closed or market ends
+   */
+  logProfit(
+    marketName: string,
+    side: string,
+    shares: number,
+    avgCost: number,
+    finalPrice: number
+  ): void {
+    if (!this.profitCsvInitialized) return;
+
+    try {
+      const now = new Date();
+      const time = now.toLocaleTimeString("en-US", { hour12: true, hour: "2-digit", minute: "2-digit" });
+      const invested = shares * avgCost;
+      const finalValue = shares * finalPrice;
+      const profitLoss = finalValue - invested;
+
+      // Clean market name (remove dates, keep short)
+      const shortMarket = marketName
+        .replace(/- January \d+.*$/i, "")
+        .replace(/Bitcoin Up or Down/i, "BTC")
+        .replace(/Ethereum Up or Down/i, "ETH")
+        .trim();
+
+      // Simple row: Time, Market, PnL
+      const row = [
+        time,
+        shortMarket,
+        `${profitLoss >= 0 ? '+' : ''}$${profitLoss.toFixed(2)}`,
+      ].join(",");
+
+      fs.appendFileSync(this.profitCsvPath, row + "\n", "utf8");
+    } catch (error) {
+      logger.error(`Failed to write profit to CSV: ${error}`);
+    }
+  }
+
+  /**
+   * Log all current positions' unrealized P&L to the PROFITS CSV
+   * Call this periodically or when you want a snapshot
+   */
+  async logCurrentProfits(): Promise<void> {
+    for (const position of this.account.positions.values()) {
+      const currentPrice = await this.marketData.getMidPrice(position.tokenId);
+      if (currentPrice && position.size > 0) {
+        this.logProfit(
+          position.title || "Unknown",
+          position.outcome || "Unknown",
+          position.size,
+          position.avgPrice,
+          currentPrice
+        );
+      }
+    }
+
+    // Add summary row
+    this.logProfitSummary();
+  }
+
+  /**
+   * Add a summary row to the PROFITS CSV
+   */
+  private logProfitSummary(): void {
+    if (!this.profitCsvInitialized) return;
+
+    try {
+      const stats = this.getStats();
+      const now = new Date();
+      const time = now.toLocaleTimeString("en-US", { hour12: true, hour: "2-digit", minute: "2-digit" });
+
+      // Simple summary row: Time, TOTAL, PnL
+      const row = [
+        time,
+        "TOTAL",
+        `${stats.totalPnL >= 0 ? '+' : ''}$${stats.totalPnL.toFixed(2)}`,
+      ].join(",");
+
+      fs.appendFileSync(this.profitCsvPath, row + "\n", "utf8");
+    } catch (error) {
+      logger.error(`Failed to write profit summary: ${error}`);
     }
   }
 

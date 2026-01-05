@@ -68,6 +68,8 @@ class MarketTracker {
     private maxMarkets = 4; // Maximum number of markets to track at once
     private marketsToClose: MarketStats[] = []; // Markets that need to be closed
     private onMarketCloseCallback?: (market: MarketStats) => Promise<void>; // Callback for closing positions
+    private onPreCloseCallback?: (market: MarketStats) => Promise<void>; // Callback 5 seconds before market ends
+    private preCloseTriggeredMarkets: Set<string> = new Set(); // Track markets that have already triggered pre-close
     private processedTrades: Set<string> = new Set(); // Track processed trades to prevent double-counting
     private displayMode: 'WATCH' | 'TRADING' | 'PAPER' = 'TRADING'; // Display mode for header
     private isDisplaying = false; // Lock to prevent concurrent display updates
@@ -459,6 +461,13 @@ class MarketTracker {
      */
     setMarketCloseCallback(callback: (market: MarketStats) => Promise<void>): void {
         this.onMarketCloseCallback = callback;
+    }
+
+    /**
+     * Set callback for 5 seconds before market ends (to capture final PnL)
+     */
+    setPreCloseCallback(callback: (market: MarketStats) => Promise<void>): void {
+        this.onPreCloseCallback = callback;
     }
 
     /**
@@ -1169,12 +1178,16 @@ class MarketTracker {
             if (slugTimestampMatch) {
                 const now = Date.now();
                 const marketStartTimestamp = parseInt(slugTimestampMatch[1], 10) * 1000;
-                const currentWindowStart = Math.floor(now / (15 * 60 * 1000)) * (15 * 60 * 1000);
+                const marketEndTimestamp = marketStartTimestamp + (15 * 60 * 1000);
 
-                // If this market's start time doesn't match current window, skip the trade
-                // but still allow the market to be displayed until it expires
-                if (marketStartTimestamp !== currentWindowStart) {
-                    // Skip trades for old windows - they should not accumulate new stats
+                // Accept trades if:
+                // 1. Market hasn't ended yet (still active)
+                // 2. Market ended within the last 60 seconds (grace period for settlement)
+                const isMarketActive = now < marketEndTimestamp;
+                const isWithinGracePeriod = now < marketEndTimestamp + (60 * 1000);
+
+                if (!isMarketActive && !isWithinGracePeriod) {
+                    // Skip trades for markets that have been closed for more than 60 seconds
                     return;
                 }
             }
@@ -1856,6 +1869,7 @@ class MarketTracker {
         // This ensures PnL is recorded with prices from ~2 minutes before market switch
         const SNAPSHOT_WINDOW_MS = 2 * 60 * 1000; // 2 minutes
         const SNAPSHOT_EARLY_MS = 30 * 1000; // 30 seconds buffer (capture between 2:00-1:30 before end)
+        const PRE_CLOSE_SECONDS = 5 * 1000; // 5 seconds before market ends
         for (const m of activeMarkets) {
             if (
                 m.endDate &&
@@ -1873,6 +1887,23 @@ class MarketTracker {
                 ) {
                     m.closingPriceUp = m.currentPriceUp;
                     m.closingPriceDown = m.currentPriceDown;
+                }
+            }
+
+            // Trigger pre-close callback 5 seconds before market ends
+            if (
+                m.endDate &&
+                this.onPreCloseCallback &&
+                !this.preCloseTriggeredMarkets.has(m.marketKey)
+            ) {
+                const timeUntilEnd = m.endDate - now;
+                if (timeUntilEnd <= PRE_CLOSE_SECONDS && timeUntilEnd > 0) {
+                    this.preCloseTriggeredMarkets.add(m.marketKey);
+                    try {
+                        await this.onPreCloseCallback(m);
+                    } catch (error) {
+                        console.error(`Error in pre-close callback for ${m.marketKey}:`, error);
+                    }
                 }
             }
         }

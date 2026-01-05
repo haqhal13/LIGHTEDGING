@@ -432,7 +432,25 @@ class MarketDiscovery {
     const markets = Array.from(this.currentMarkets.values());
     for (const market of markets) {
       const endTime = new Date(market.end_date_iso).getTime();
+      const timeLeft = endTime - now;
+
+      // Market has ended
       if (now > endTime) return true;
+
+      // Sanity check: 15-minute markets should never have more than 16 minutes left
+      // If they do, the market data is stale and needs refresh
+      const is15Min = market.market_type.includes('15m');
+      if (is15Min && timeLeft > 16 * 60 * 1000) {
+        log('warn', `[${market.market_type}] Stale market detected (${Math.floor(timeLeft / 60000)}m left for 15m market)`);
+        return true;
+      }
+
+      // Same for hourly markets - shouldn't have more than 61 minutes left
+      const is1Hour = market.market_type.includes('up-or-down');
+      if (is1Hour && timeLeft > 61 * 60 * 1000) {
+        log('warn', `[${market.market_type}] Stale market detected (${Math.floor(timeLeft / 60000)}m left for 1h market)`);
+        return true;
+      }
     }
     return false;
   }
@@ -790,11 +808,27 @@ class PriceStreamLogger {
   private startMarketCheckInterval(): void {
     this.stopMarketCheckInterval();
 
+    // Track last refresh time to force periodic refresh
+    let lastForceRefresh = Date.now();
+    const FORCE_REFRESH_INTERVAL_MS = 5 * 60 * 1000; // Force refresh every 5 minutes
+
     this.marketCheckInterval = setInterval(async () => {
       if (this.isShuttingDown) return;
 
+      const now = Date.now();
       const needsSwitch = this.marketDiscovery.getMarketTypesNeedingSwitch();
-      if (needsSwitch.length > 0 || this.marketDiscovery.hasAnyMarketEnded()) {
+      const anyEnded = this.marketDiscovery.hasAnyMarketEnded();
+      const timeSinceRefresh = now - lastForceRefresh;
+
+      // Refresh if:
+      // 1. Any market needs switching (< 60s left)
+      // 2. Any market has ended
+      // 3. It's been more than 5 minutes since last refresh (force periodic refresh)
+      if (needsSwitch.length > 0 || anyEnded || timeSinceRefresh > FORCE_REFRESH_INTERVAL_MS) {
+        if (timeSinceRefresh > FORCE_REFRESH_INTERVAL_MS) {
+          log('info', 'Periodic market refresh (every 5 min)...');
+        }
+        lastForceRefresh = now;
         await this.discoverAndConnect();
       }
     }, CONFIG.MARKET_CHECK_INTERVAL_MS);

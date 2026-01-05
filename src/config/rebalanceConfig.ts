@@ -54,6 +54,11 @@ export interface RebalanceConfig {
   tilt_boost_multiplier: number;
   price_stop_threshold: number;
 
+  // Bell curve sizing (maximize middle, minimize extremes)
+  bell_curve_enabled: boolean;
+  bell_curve_peak_multiplier: number;    // 1.50 at price 0.50
+  bell_curve_extreme_multiplier: number; // 0.30 at price 0.10/0.90
+
   // Market close behavior (15-minute markets)
   close_reduce_activity_minutes: number;
   close_activity_multiplier: number;
@@ -107,6 +112,10 @@ const DEFAULT_CONFIG: RebalanceConfig = {
   tilt_threshold: 0.59,
   tilt_boost_multiplier: 1.25,
   price_stop_threshold: 0.90,
+  // Bell curve sizing (maximize middle, minimize extremes)
+  bell_curve_enabled: true,
+  bell_curve_peak_multiplier: 1.50,
+  bell_curve_extreme_multiplier: 0.30,
   // Market close behavior (15-minute markets)
   close_reduce_activity_minutes: 4,
   close_activity_multiplier: 0.25,
@@ -214,6 +223,7 @@ export function startConfigWatcher(onConfigChange?: (config: RebalanceConfig) =>
           logger.info(`   price_stop: ${newConfig.price_stop_threshold}`);
           logger.info(`   1h sizing: $${newConfig.sizing_1h_base} + (price × ${newConfig.sizing_1h_multiplier}), cooldown ${newConfig.sizing_1h_cooldown_sec}s`);
           logger.info(`   15m sizing: $${newConfig.sizing_15m_base} + (price × ${newConfig.sizing_15m_multiplier}), cooldown ${newConfig.sizing_15m_cooldown_sec}s`);
+          logger.info(`   bell curve: ${newConfig.bell_curve_enabled ? `ON (peak ${newConfig.bell_curve_peak_multiplier}x @ 0.50, extreme ${newConfig.bell_curve_extreme_multiplier}x @ edges)` : 'OFF'}`);
           logger.info(`   close behavior: reduce freq at ${newConfig.close_reduce_activity_minutes}min (${newConfig.close_activity_multiplier * 100}%), reduce size at ${newConfig.close_reduce_size_minutes}min (${newConfig.close_size_multiplier * 100}%)`);
 
           if (onConfigChange) {

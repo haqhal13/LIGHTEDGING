@@ -260,6 +260,54 @@ export class PolymarketBot {
     if (this.isPaperMode) {
       marketTracker.setDisplayMode('PAPER');
       logger.info("Paper mode: Dashboard will display live market data and paper trades");
+
+      // Set up market close callback to log profits when markets close
+      marketTracker.setMarketCloseCallback(async (closedMarket) => {
+        logger.info(`Market closed: ${closedMarket.marketName} - logging profits...`);
+
+        // Log profits for all positions in this market
+        for (const position of this.paperTrader.getAllPositions()) {
+          // Check if position is in this market (by condition ID)
+          if (position.conditionId === closedMarket.conditionId) {
+            // Get final price (use 1.0 for winner, 0.0 for loser based on outcome)
+            // For now, use current position price as final
+            const finalPrice = position.currentPrice || position.avgPrice;
+            this.paperTrader.logProfit(
+              closedMarket.marketName || position.title || "Unknown",
+              position.outcome || "Unknown",
+              position.size,
+              position.avgPrice,
+              finalPrice
+            );
+          }
+        }
+      });
+
+      // Set up pre-close callback to log profits 5 seconds before market ends
+      marketTracker.setPreCloseCallback(async (market) => {
+        logger.info(`📊 Market ending in 5s: ${market.marketName} - capturing final PnL...`);
+
+        // Log profits for all positions in this market
+        for (const position of this.paperTrader.getAllPositions()) {
+          // Check if position is in this market (by condition ID)
+          if (position.conditionId === market.conditionId) {
+            // Use current price from market or position
+            const finalPrice = market.currentPriceUp !== undefined && position.outcome?.toLowerCase() === 'up'
+              ? market.currentPriceUp
+              : market.currentPriceDown !== undefined && position.outcome?.toLowerCase() === 'down'
+                ? market.currentPriceDown
+                : position.currentPrice || position.avgPrice;
+
+            this.paperTrader.logProfit(
+              market.marketName || position.title || "Unknown",
+              position.outcome || "Unknown",
+              position.size,
+              position.avgPrice,
+              finalPrice
+            );
+          }
+        }
+      });
     }
 
     // Track last dashboard update time

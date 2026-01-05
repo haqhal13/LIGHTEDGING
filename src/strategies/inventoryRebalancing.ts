@@ -214,6 +214,16 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
       return;
     }
 
+    // Debug: Log which markets priceStreamLogger has (only once per missing market)
+    if (this.marketStates.size < 4) {
+      const foundTypes = Array.from(streamMarkets.keys());
+      const missingTypes = InventoryBalancedRebalancingStrategy.MARKET_TYPES.filter(t => !streamMarkets.has(t));
+      if (missingTypes.length > 0) {
+        this.log(`[DEBUG] priceStreamLogger has ${streamMarkets.size} markets: [${foundTypes.join(', ')}]`);
+        this.log(`[DEBUG] Missing market types: [${missingTypes.join(', ')}]`);
+      }
+    }
+
     for (const marketType of InventoryBalancedRebalancingStrategy.MARKET_TYPES) {
       const wsMarket = streamMarkets.get(marketType);
 
@@ -402,10 +412,8 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
       return signals;
     }
 
-    // PRICE STOP THRESHOLD: When one side >= this, stop trading the losing side
+    // Price stop threshold used for tilt progress calculation
     const priceStopThreshold = this.rebalanceConfig.price_stop_threshold;
-    const upIsWinning = yesPrice >= priceStopThreshold;
-    const downIsWinning = noPrice >= priceStopThreshold;
 
     // Calculate base trade sizes using formula: base + (price × multiplier)
     // Apply close size multiplier for near-close behavior (15m markets)
@@ -413,17 +421,29 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
     const baseDownAmount = this.calculateTradeSize(noPrice, marketType) * closeSizeMultiplier;
 
     // TILT BOOST: When one side >= tilt_threshold, boost trades on winning side
+    // WATCHER STYLE: Never stop one side completely, just favor the cheaper side
     const tiltThreshold = this.rebalanceConfig.tilt_threshold;
     const tiltBoost = this.rebalanceConfig.tilt_boost_multiplier;
 
     let upBoost = 1.0;
     let downBoost = 1.0;
 
+    // WATCHER BEHAVIOR: Always trade BOTH sides, but favor cheaper side (55/45 split)
+    // When price < 0.46: favor buying that side
+    // When price > 0.54: favor buying opposite (cheaper) side
+    // Never stop one side completely
+
     if (yesPrice >= tiltThreshold) {
       upBoost = tiltBoost;  // Boost UP trades when UP is winning
+      // Reduce DOWN but NEVER to zero - minimum 0.15x (watcher never stops a side)
+      const tiltProgress = Math.min(1, (yesPrice - tiltThreshold) / (priceStopThreshold - tiltThreshold));
+      downBoost = Math.max(0.15, 0.5 * (1 - tiltProgress));  // 0.5 → 0.15 as price goes 0.59 → 0.90+
     }
     if (noPrice >= tiltThreshold) {
       downBoost = tiltBoost;  // Boost DOWN trades when DOWN is winning
+      // Reduce UP but NEVER to zero - minimum 0.15x
+      const tiltProgress = Math.min(1, (noPrice - tiltThreshold) / (priceStopThreshold - tiltThreshold));
+      upBoost = Math.max(0.15, 0.5 * (1 - tiltProgress));  // 0.5 → 0.15 as price goes 0.59 → 0.90+
     }
 
     // Apply boost to base amounts
@@ -453,13 +473,9 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
     let yesWeight = Math.max(0, Math.min(1, 1 - (yesDeviation / maxSkew)));
     let noWeight = Math.max(0, Math.min(1, 1 - (noDeviation / maxSkew)));
 
-    // STOP trading the losing side when winning side > 0.90
-    if (upIsWinning) {
-      noWeight = 0;  // Stop trading DOWN when UP > 0.90
-    }
-    if (downIsWinning) {
-      yesWeight = 0;  // Stop trading UP when DOWN > 0.90
-    }
+    // WATCHER BEHAVIOR: Never stop one side completely
+    // Just apply the tilt boost/reduction from above
+    // The 0.15x minimum ensures we always trade both sides
 
     // Apply weights to BOOSTED trade amounts
     const upTradeAmount = boostedUpAmount * yesWeight;
@@ -560,20 +576,39 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
    * Calculate trade size based on market type
    * 1-Hour: $0.50 + (price × 8), clamped $0.01-$14.00
    * 15-Min: $0.25 + (price × 12), clamped $0.01-$26.00
+   *
+   * BELL CURVE: If enabled, applies a multiplier that peaks at 0.50 and
+   * decreases towards extremes (0.10 and 0.90)
+   * Formula: multiplier = extreme + (peak - extreme) × (1 - |price - 0.5| × 2)
    */
   private calculateTradeSize(price: number, marketType: string): number {
     const config = this.rebalanceConfig;
     const is15m = this.is15MinuteMarket(marketType);
 
+    let baseSize: number;
     if (is15m) {
       // 15-Minute: aggressive sizing
-      const size = config.sizing_15m_base + (price * config.sizing_15m_multiplier);
-      return Math.max(config.sizing_15m_min_trade, Math.min(size, config.sizing_15m_max_trade));
+      baseSize = config.sizing_15m_base + (price * config.sizing_15m_multiplier);
+      baseSize = Math.max(config.sizing_15m_min_trade, Math.min(baseSize, config.sizing_15m_max_trade));
     } else {
       // 1-Hour: conservative sizing
-      const size = config.sizing_1h_base + (price * config.sizing_1h_multiplier);
-      return Math.max(config.sizing_1h_min_trade, Math.min(size, config.sizing_1h_max_trade));
+      baseSize = config.sizing_1h_base + (price * config.sizing_1h_multiplier);
+      baseSize = Math.max(config.sizing_1h_min_trade, Math.min(baseSize, config.sizing_1h_max_trade));
     }
+
+    // Apply bell curve if enabled
+    // Peak at 0.50, minimum at extremes (0.10, 0.90)
+    if (config.bell_curve_enabled) {
+      const distanceFromCenter = Math.abs(price - 0.5);
+      // Linear interpolation: at center (distance=0) → peak, at edge (distance=0.5) → extreme
+      // multiplier = extreme + (peak - extreme) × (1 - distance × 2)
+      const curveMultiplier = config.bell_curve_extreme_multiplier +
+        (config.bell_curve_peak_multiplier - config.bell_curve_extreme_multiplier) *
+        Math.max(0, 1 - distanceFromCenter * 2);
+      baseSize *= curveMultiplier;
+    }
+
+    return baseSize;
   }
 
   /**

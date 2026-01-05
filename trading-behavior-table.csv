@@ -4,40 +4,69 @@ LIGHTEDGEBOT TRADING BEHAVIOR - COMPREHENSIVE REFERENCE
 SECTION 1: CONFIGURATION PARAMETERS
 ================================================================================
 Parameter,Value,Description
-sizing_base,$0.75,Base amount added to every trade
-sizing_price_multiplier,10,Multiplied by price and added to base
-min_trade,$0.01,Minimum trade size allowed
-max_trade,$26.00,Maximum trade size allowed
-max_skew_ratio,0.20,Maximum inventory deviation before weight = 0
 target_yes_ratio,0.50,Target inventory balance (50% UP / 50% DOWN)
-price_threshold,0.90,When exceeded stop trading the losing side
-Trade Size Formula,$0.75 + (price × 10),Clamped between $0.01 and $26.00
+max_skew_ratio,0.20,Maximum inventory deviation before weight = 0
+price_stop_threshold,0.90,When exceeded stop trading the losing side
+tilt_threshold,0.59,When tilt behavior starts (boost winning side)
+tilt_boost_multiplier,1.25,How much bigger winning trades are (1.25x = 25% boost)
+sizing_1h_base,$0.50,1-hour market base sizing
+sizing_1h_multiplier,8.00,1-hour market price multiplier
+sizing_1h_max_trade,$14.00,1-hour market maximum trade size
+sizing_15m_base,$0.25,15-minute market base sizing
+sizing_15m_multiplier,12.00,15-minute market price multiplier
+sizing_15m_max_trade,$26.00,15-minute market maximum trade size
+min_trade_size,$0.01,Minimum trade size allowed
+1-Hour Trade Size Formula,$0.50 + (price × 8.00),Clamped between $0.01 and $14.00
+15-Minute Trade Size Formula,$0.25 + (price × 12.00),Clamped between $0.01 and $26.00
 Weight Formula,1 - (deviation / 0.20),Clamped between 0 and 1
 
-SECTION 2: PRICE-BASED TRADE SIZING (No Inventory Weighting)
+SECTION 2: 1-HOUR MARKET PRICE-BASED TRADE SIZING (No Inventory Weighting)
 ================================================================================
 UP Price,DOWN Price,UP Base Size,DOWN Base Size,Calculation UP,Calculation DOWN
-0.05,0.95,$1.25,$10.25,$0.75 + (0.05 × 10),$0.75 + (0.95 × 10)
-0.10,0.90,$1.75,$9.75,$0.75 + (0.10 × 10),$0.75 + (0.90 × 10)
-0.15,0.85,$2.25,$9.25,$0.75 + (0.15 × 10),$0.75 + (0.85 × 10)
-0.20,0.80,$2.75,$8.75,$0.75 + (0.20 × 10),$0.75 + (0.80 × 10)
-0.25,0.75,$3.25,$8.25,$0.75 + (0.25 × 10),$0.75 + (0.75 × 10)
-0.30,0.70,$3.75,$7.75,$0.75 + (0.30 × 10),$0.75 + (0.70 × 10)
-0.35,0.65,$4.25,$7.25,$0.75 + (0.35 × 10),$0.75 + (0.65 × 10)
-0.40,0.60,$4.75,$6.75,$0.75 + (0.40 × 10),$0.75 + (0.60 × 10)
-0.45,0.55,$5.25,$6.25,$0.75 + (0.45 × 10),$0.75 + (0.55 × 10)
-0.50,0.50,$5.75,$5.75,$0.75 + (0.50 × 10),$0.75 + (0.50 × 10)
-0.55,0.45,$6.25,$5.25,$0.75 + (0.55 × 10),$0.75 + (0.45 × 10)
-0.60,0.40,$6.75,$4.75,$0.75 + (0.60 × 10),$0.75 + (0.40 × 10)
-0.65,0.35,$7.25,$4.25,$0.75 + (0.65 × 10),$0.75 + (0.35 × 10)
-0.70,0.30,$7.75,$3.75,$0.75 + (0.70 × 10),$0.75 + (0.30 × 10)
-0.75,0.25,$8.25,$3.25,$0.75 + (0.75 × 10),$0.75 + (0.25 × 10)
-0.80,0.20,$8.75,$2.75,$0.75 + (0.80 × 10),$0.75 + (0.20 × 10)
-0.85,0.15,$9.25,$2.25,$0.75 + (0.85 × 10),$0.75 + (0.15 × 10)
-0.90,0.10,$9.75,$1.75,$0.75 + (0.90 × 10),$0.75 + (0.10 × 10)
-0.95,0.05,$10.25,$1.25,$0.75 + (0.95 × 10),$0.75 + (0.05 × 10)
+0.05,0.95,$0.90,$8.10,$0.50 + (0.05 × 8),$0.50 + (0.95 × 8)
+0.10,0.90,$1.30,$7.70,$0.50 + (0.10 × 8),$0.50 + (0.90 × 8)
+0.15,0.85,$1.70,$7.30,$0.50 + (0.15 × 8),$0.50 + (0.85 × 8)
+0.20,0.80,$2.10,$6.90,$0.50 + (0.20 × 8),$0.50 + (0.80 × 8)
+0.25,0.75,$2.50,$6.50,$0.50 + (0.25 × 8),$0.50 + (0.75 × 8)
+0.30,0.70,$2.90,$6.10,$0.50 + (0.30 × 8),$0.50 + (0.70 × 8)
+0.35,0.65,$3.30,$5.70,$0.50 + (0.35 × 8),$0.50 + (0.65 × 8)
+0.40,0.60,$3.70,$5.30,$0.50 + (0.40 × 8),$0.50 + (0.60 × 8)
+0.45,0.55,$4.10,$4.90,$0.50 + (0.45 × 8),$0.50 + (0.55 × 8)
+0.50,0.50,$4.50,$4.50,$0.50 + (0.50 × 8),$0.50 + (0.50 × 8)
+0.55,0.45,$4.90,$4.10,$0.50 + (0.55 × 8),$0.50 + (0.45 × 8)
+0.60,0.40,$5.30,$3.70,$0.50 + (0.60 × 8),$0.50 + (0.40 × 8)
+0.65,0.35,$5.70,$3.30,$0.50 + (0.65 × 8),$0.50 + (0.35 × 8)
+0.70,0.30,$6.10,$2.90,$0.50 + (0.70 × 8),$0.50 + (0.30 × 8)
+0.75,0.25,$6.50,$2.50,$0.50 + (0.75 × 8),$0.50 + (0.25 × 8)
+0.80,0.20,$6.90,$2.10,$0.50 + (0.80 × 8),$0.50 + (0.20 × 8)
+0.85,0.15,$7.30,$1.70,$0.50 + (0.85 × 8),$0.50 + (0.15 × 8)
+0.90,0.10,$7.70,$1.30,$0.50 + (0.90 × 8),$0.50 + (0.10 × 8)
+0.95,0.05,$8.10,$0.90,$0.50 + (0.95 × 8),$0.50 + (0.05 × 8)
 
-SECTION 3: INVENTORY WEIGHTING CALCULATION
+SECTION 3: 15-MINUTE MARKET PRICE-BASED TRADE SIZING (No Inventory Weighting)
+================================================================================
+UP Price,DOWN Price,UP Base Size,DOWN Base Size,Calculation UP,Calculation DOWN
+0.05,0.95,$0.85,$11.65,$0.25 + (0.05 × 12),$0.25 + (0.95 × 12)
+0.10,0.90,$1.45,$11.05,$0.25 + (0.10 × 12),$0.25 + (0.90 × 12)
+0.15,0.85,$2.05,$10.45,$0.25 + (0.15 × 12),$0.25 + (0.85 × 12)
+0.20,0.80,$2.65,$9.85,$0.25 + (0.20 × 12),$0.25 + (0.80 × 12)
+0.25,0.75,$3.25,$9.25,$0.25 + (0.25 × 12),$0.25 + (0.75 × 12)
+0.30,0.70,$3.85,$8.65,$0.25 + (0.30 × 12),$0.25 + (0.70 × 12)
+0.35,0.65,$4.45,$8.05,$0.25 + (0.35 × 12),$0.25 + (0.65 × 12)
+0.40,0.60,$5.05,$7.45,$0.25 + (0.40 × 12),$0.25 + (0.60 × 12)
+0.45,0.55,$5.65,$6.85,$0.25 + (0.45 × 12),$0.25 + (0.55 × 12)
+0.50,0.50,$6.25,$6.25,$0.25 + (0.50 × 12),$0.25 + (0.50 × 12)
+0.55,0.45,$6.85,$5.65,$0.25 + (0.55 × 12),$0.25 + (0.45 × 12)
+0.60,0.40,$7.45,$5.05,$0.25 + (0.60 × 12),$0.25 + (0.40 × 12)
+0.65,0.35,$8.05,$4.45,$0.25 + (0.65 × 12),$0.25 + (0.35 × 12)
+0.70,0.30,$8.65,$3.85,$0.25 + (0.70 × 12),$0.25 + (0.30 × 12)
+0.75,0.25,$9.25,$3.25,$0.25 + (0.75 × 12),$0.25 + (0.25 × 12)
+0.80,0.20,$9.85,$2.65,$0.25 + (0.80 × 12),$0.25 + (0.20 × 12)
+0.85,0.15,$10.45,$2.05,$0.25 + (0.85 × 12),$0.25 + (0.15 × 12)
+0.90,0.10,$11.05,$1.45,$0.25 + (0.90 × 12),$0.25 + (0.10 × 12)
+0.95,0.05,$11.65,$0.85,$0.25 + (0.95 × 12),$0.25 + (0.05 × 12)
+
+SECTION 4: INVENTORY WEIGHTING CALCULATION
 ================================================================================
 How weighting works:
 - deviation = current_ratio - target_ratio (0.50)
@@ -65,128 +94,92 @@ $35.00,$65.00,$100.00,35.0%,-0.15,1 - (-0.15 / 0.20) → clamped,1.00,+0.15,1 - 
 $30.00,$70.00,$100.00,30.0%,-0.20,1 - (-0.20 / 0.20) → clamped,1.00,+0.20,1 - (0.20 / 0.20),0.00
 $25.00,$75.00,$100.00,25.0%,-0.25,1 - (-0.25 / 0.20) → clamped,1.00,+0.25,1 - (0.25 / 0.20) → clamped,0.00
 
-SECTION 4: PRICE THRESHOLD RULE (> 0.90)
+SECTION 5: TILT TRADING BEHAVIOR (Price-Based Boost)
 ================================================================================
-When one side price exceeds 0.90 the OTHER side stops trading completely
+Tilt trading boosts the winning side when price >= 0.59 and reduces the losing side
+Key values:
+- tilt_threshold: 0.59 (when tilt starts)
+- tilt_boost_multiplier: 1.25 (how much to boost winning side)
+- price_stop_threshold: 0.90 (when losing side STOPS completely)
+- Losing side: progressively reduced from 0.5x at threshold to 0x at price_stop
 
-UP Price,DOWN Price,UP Weight Override,DOWN Weight Override,Behavior
-0.05,0.95,0 (forced),Normal,DOWN > 0.90: STOP trading UP completely
-0.10,0.90,0 (forced),Normal,DOWN >= 0.90: STOP trading UP completely
-0.15,0.85,Normal,Normal,Both sides can trade
-0.20,0.80,Normal,Normal,Both sides can trade
-0.50,0.50,Normal,Normal,Both sides can trade
-0.80,0.20,Normal,Normal,Both sides can trade
-0.85,0.15,Normal,Normal,Both sides can trade
-0.90,0.10,Normal,0 (forced),UP >= 0.90: STOP trading DOWN completely
-0.95,0.05,Normal,0 (forced),UP > 0.90: STOP trading DOWN completely
+UP Price,DOWN Price,UP Tilt Boost,DOWN Tilt Boost,Behavior,Notes
+0.05,0.95,0.00,1.25,DOWN only (UP blocked by 0.90 rule),DOWN >= 0.90: STOP trading UP completely
+0.10,0.90,0.00,1.25,DOWN only (UP blocked by 0.90 rule),DOWN >= 0.90: STOP trading UP completely
+0.15,0.85,1.00,1.25,DOWN boosted UP normal,No tilt (below 0.59 threshold)
+0.20,0.80,1.00,1.25,DOWN boosted UP normal,No tilt (below 0.59 threshold)
+0.25,0.75,1.00,1.25,DOWN boosted UP normal,No tilt (below 0.59 threshold)
+0.30,0.70,1.00,1.25,DOWN boosted UP normal,No tilt (below 0.59 threshold)
+0.35,0.65,1.00,1.25,DOWN boosted UP normal,No tilt (below 0.59 threshold)
+0.40,0.60,1.00,1.25,DOWN boosted UP normal,No tilt (below 0.59 threshold)
+0.45,0.55,1.00,1.00,Both normal,No tilt (both below 0.59 threshold)
+0.50,0.50,1.00,1.00,Both normal (balanced),No tilt (both below 0.59 threshold)
+0.55,0.45,1.00,1.00,Both normal,No tilt (both below 0.59 threshold)
+0.59,0.41,1.25,0.50,Tilt starts (threshold),UP boosted DOWN reduced to 0.5x
+0.60,0.40,1.25,0.48,UP boosted DOWN reduced,Progressive reduction as UP price increases
+0.65,0.35,1.25,0.40,UP boosted DOWN reduced,Progressive reduction as UP price increases
+0.70,0.30,1.25,0.32,UP boosted DOWN reduced,Progressive reduction as UP price increases
+0.75,0.25,1.25,0.24,UP boosted DOWN reduced,Progressive reduction as UP price increases
+0.80,0.20,1.25,0.16,UP boosted DOWN reduced,Progressive reduction as UP price increases
+0.85,0.15,1.25,0.10,UP boosted DOWN reduced,Progressive reduction as UP price increases
+0.90,0.10,1.25,0.00,UP only (DOWN blocked),UP >= 0.90: STOP trading DOWN completely
+0.95,0.05,1.25,0.00,UP only (DOWN blocked),UP >= 0.90: STOP trading DOWN completely
 
-SECTION 5: COMPLETE TRADING BEHAVIOR (Price + Inventory Combined)
+SECTION 6: COMPLETE 15-MINUTE MARKET BEHAVIOR (Price + Tilt + Inventory)
 ================================================================================
 Assuming 50/50 balanced inventory (weights = 1.0 for both sides)
+Base sizing: $0.25 + (price × 12.00)
 
-UP Price,DOWN Price,Base UP,$,Base DOWN,$,UP Weight,DOWN Weight,Final UP Trade,$,Final DOWN Trade,$,Behavior
-0.05,0.95,$1.25,$10.25,0.00,1.00,SKIP,$10.25,DOWN only (UP side blocked by 0.90 rule)
-0.10,0.90,$1.75,$9.75,0.00,1.00,SKIP,$9.75,DOWN only (UP side blocked by 0.90 rule)
-0.15,0.85,$2.25,$9.25,1.00,1.00,$2.25,$9.25,Both sides trade at full weight
-0.20,0.80,$2.75,$8.75,1.00,1.00,$2.75,$8.75,Both sides trade at full weight
-0.25,0.75,$3.25,$8.25,1.00,1.00,$3.25,$8.25,Both sides trade at full weight
-0.30,0.70,$3.75,$7.75,1.00,1.00,$3.75,$7.75,Both sides trade at full weight
-0.35,0.65,$4.25,$7.25,1.00,1.00,$4.25,$7.25,Both sides trade at full weight
-0.40,0.60,$4.75,$6.75,1.00,1.00,$4.75,$6.75,Both sides trade at full weight
-0.45,0.55,$5.25,$6.25,1.00,1.00,$5.25,$6.25,Both sides trade at full weight
-0.50,0.50,$5.75,$5.75,1.00,1.00,$5.75,$5.75,Both sides equal
-0.55,0.45,$6.25,$5.25,1.00,1.00,$6.25,$5.25,Both sides trade at full weight
-0.60,0.40,$6.75,$4.75,1.00,1.00,$6.75,$4.75,Both sides trade at full weight
-0.65,0.35,$7.25,$4.25,1.00,1.00,$7.25,$4.25,Both sides trade at full weight
-0.70,0.30,$7.75,$3.75,1.00,1.00,$7.75,$3.75,Both sides trade at full weight
-0.75,0.25,$8.25,$3.25,1.00,1.00,$8.25,$3.25,Both sides trade at full weight
-0.80,0.20,$8.75,$2.75,1.00,1.00,$8.75,$2.75,Both sides trade at full weight
-0.85,0.15,$9.25,$2.25,1.00,1.00,$9.25,$2.25,Both sides trade at full weight
-0.90,0.10,$9.75,$1.75,1.00,0.00,$9.75,SKIP,UP only (DOWN side blocked by 0.90 rule)
-0.95,0.05,$10.25,$1.25,1.00,0.00,$10.25,SKIP,UP only (DOWN side blocked by 0.90 rule)
+UP Price,DOWN Price,Base UP $,Base DOWN $,UP Tilt,DOWN Tilt,UP Weight,DOWN Weight,Final UP Trade $,Final DOWN Trade $,Behavior
+0.05,0.95,$0.85,$11.65,0.00,1.25,0.00,1.00,SKIP,$11.65,DOWN only (UP side blocked by 0.90 rule)
+0.10,0.90,$1.45,$11.05,0.00,1.25,0.00,1.00,SKIP,$11.05,DOWN only (UP side blocked by 0.90 rule)
+0.15,0.85,$2.05,$10.45,1.00,1.25,1.00,1.00,$2.05,$13.06,DOWN boosted UP normal
+0.20,0.80,$2.65,$9.85,1.00,1.25,1.00,1.00,$2.65,$12.31,DOWN boosted UP normal
+0.25,0.75,$3.25,$9.25,1.00,1.25,1.00,1.00,$3.25,$11.56,DOWN boosted UP normal
+0.30,0.70,$3.85,$8.65,1.00,1.25,1.00,1.00,$3.85,$10.81,DOWN boosted UP normal
+0.35,0.65,$4.45,$8.05,1.00,1.25,1.00,1.00,$4.45,$10.06,DOWN boosted UP normal
+0.40,0.60,$5.05,$7.45,1.00,1.25,1.00,1.00,$5.05,$9.31,DOWN boosted UP normal
+0.45,0.55,$5.65,$6.85,1.00,1.00,1.00,1.00,$5.65,$6.85,Both sides trade at full weight
+0.50,0.50,$6.25,$6.25,1.00,1.00,1.00,1.00,$6.25,$6.25,Both sides equal
+0.55,0.45,$6.85,$5.65,1.00,1.00,1.00,1.00,$6.85,$5.65,Both sides trade at full weight
+0.59,0.41,$7.33,$5.17,1.25,0.50,1.00,1.00,$9.16,$2.59,Tilt starts - UP boosted DOWN reduced
+0.60,0.40,$7.45,$5.05,1.25,0.48,1.00,1.00,$9.31,$2.42,UP boosted DOWN reduced
+0.65,0.35,$8.05,$4.45,1.25,0.40,1.00,1.00,$10.06,$1.78,UP boosted DOWN reduced
+0.70,0.30,$8.65,$3.85,1.25,0.32,1.00,1.00,$10.81,$1.23,UP boosted DOWN reduced
+0.75,0.25,$9.25,$3.25,1.25,0.24,1.00,1.00,$11.56,$0.78,UP boosted DOWN reduced
+0.80,0.20,$9.85,$2.65,1.25,0.16,1.00,1.00,$12.31,$0.42,UP boosted DOWN reduced
+0.85,0.15,$10.45,$2.05,1.25,0.10,1.00,1.00,$13.06,$0.21,UP boosted DOWN reduced
+0.90,0.10,$11.05,$1.45,1.25,0.00,1.00,0.00,$13.81,SKIP,UP only (DOWN side blocked by 0.90 rule)
+0.95,0.05,$11.65,$0.85,1.25,0.00,1.00,0.00,$14.56,SKIP,UP only (DOWN side blocked by 0.90 rule)
 
-SECTION 6: COMPLETE EXAMPLES WITH UNBALANCED INVENTORY
+SECTION 7: COMPLETE 1-HOUR MARKET BEHAVIOR (Price + Tilt + Inventory)
 ================================================================================
+Assuming 50/50 balanced inventory (weights = 1.0 for both sides)
+Base sizing: $0.50 + (price × 8.00)
 
-EXAMPLE 1: Price 0.60/0.40 with 60% UP / 40% DOWN inventory
-Parameter,Value,Calculation
-UP Price,0.60,
-DOWN Price,0.40,
-Base UP Size,$6.75,$0.75 + (0.60 × 10)
-Base DOWN Size,$4.75,$0.75 + (0.40 × 10)
-UP Inventory,$60.00,
-DOWN Inventory,$40.00,
-Total Inventory,$100.00,
-Current UP Ratio,60%,$60 / $100
-Target Ratio,50%,
-UP Deviation,+0.10,0.60 - 0.50
-DOWN Deviation,-0.10,0.40 - 0.50
-UP Weight,0.50,1 - (0.10 / 0.20)
-DOWN Weight,1.00,1 - (-0.10 / 0.20) → clamped to 1.0
-Final UP Trade,$3.38,$6.75 × 0.50
-Final DOWN Trade,$4.75,$4.75 × 1.00
-Result,Trade both but UP reduced by 50%,Rebalancing toward 50/50
+UP Price,DOWN Price,Base UP $,Base DOWN $,UP Tilt,DOWN Tilt,UP Weight,DOWN Weight,Final UP Trade $,Final DOWN Trade $,Behavior
+0.05,0.95,$0.90,$8.10,0.00,1.25,0.00,1.00,SKIP,$10.13,DOWN only (UP side blocked by 0.90 rule)
+0.10,0.90,$1.30,$7.70,0.00,1.25,0.00,1.00,SKIP,$9.63,DOWN only (UP side blocked by 0.90 rule)
+0.15,0.85,$1.70,$7.30,1.00,1.25,1.00,1.00,$1.70,$9.13,DOWN boosted UP normal
+0.20,0.80,$2.10,$6.90,1.00,1.25,1.00,1.00,$2.10,$8.63,DOWN boosted UP normal
+0.25,0.75,$2.50,$6.50,1.00,1.25,1.00,1.00,$2.50,$8.13,DOWN boosted UP normal
+0.30,0.70,$2.90,$6.10,1.00,1.25,1.00,1.00,$2.90,$7.63,DOWN boosted UP normal
+0.35,0.65,$3.30,$5.70,1.00,1.25,1.00,1.00,$3.30,$7.13,DOWN boosted UP normal
+0.40,0.60,$3.70,$5.30,1.00,1.25,1.00,1.00,$3.70,$6.63,DOWN boosted UP normal
+0.45,0.55,$4.10,$4.90,1.00,1.00,1.00,1.00,$4.10,$4.90,Both sides trade at full weight
+0.50,0.50,$4.50,$4.50,1.00,1.00,1.00,1.00,$4.50,$4.50,Both sides equal
+0.55,0.45,$4.90,$4.10,1.00,1.00,1.00,1.00,$4.90,$4.10,Both sides trade at full weight
+0.59,0.41,$5.22,$3.78,1.25,0.50,1.00,1.00,$6.53,$1.89,Tilt starts - UP boosted DOWN reduced
+0.60,0.40,$5.30,$3.70,1.25,0.48,1.00,1.00,$6.63,$1.78,UP boosted DOWN reduced
+0.65,0.35,$5.70,$3.30,1.25,0.40,1.00,1.00,$7.13,$1.32,UP boosted DOWN reduced
+0.70,0.30,$6.10,$2.90,1.25,0.32,1.00,1.00,$7.63,$0.93,UP boosted DOWN reduced
+0.75,0.25,$6.50,$2.50,1.25,0.24,1.00,1.00,$8.13,$0.60,UP boosted DOWN reduced
+0.80,0.20,$6.90,$2.10,1.25,0.16,1.00,1.00,$8.63,$0.34,UP boosted DOWN reduced
+0.85,0.15,$7.30,$1.70,1.25,0.10,1.00,1.00,$9.13,$0.17,UP boosted DOWN reduced
+0.90,0.10,$7.70,$1.30,1.25,0.00,1.00,0.00,$9.63,SKIP,UP only (DOWN side blocked by 0.90 rule)
+0.95,0.05,$8.10,$0.90,1.25,0.00,1.00,0.00,$10.13,SKIP,UP only (DOWN side blocked by 0.90 rule)
 
-EXAMPLE 2: Price 0.70/0.30 with 70% UP / 30% DOWN inventory
-Parameter,Value,Calculation
-UP Price,0.70,
-DOWN Price,0.30,
-Base UP Size,$7.75,$0.75 + (0.70 × 10)
-Base DOWN Size,$3.75,$0.75 + (0.30 × 10)
-UP Inventory,$70.00,
-DOWN Inventory,$30.00,
-Total Inventory,$100.00,
-Current UP Ratio,70%,$70 / $100
-Target Ratio,50%,
-UP Deviation,+0.20,0.70 - 0.50
-DOWN Deviation,-0.20,0.30 - 0.50
-UP Weight,0.00,1 - (0.20 / 0.20) = 0
-DOWN Weight,1.00,1 - (-0.20 / 0.20) → clamped to 1.0
-Final UP Trade,SKIP,Weight is 0
-Final DOWN Trade,$3.75,$3.75 × 1.00
-Result,DOWN only - UP at max skew,Aggressively rebalancing to DOWN
-
-EXAMPLE 3: Price 0.90/0.10 with 50% UP / 50% DOWN inventory
-Parameter,Value,Calculation
-UP Price,0.90,
-DOWN Price,0.10,
-Base UP Size,$9.75,$0.75 + (0.90 × 10)
-Base DOWN Size,$1.75,$0.75 + (0.10 × 10)
-UP Inventory,$50.00,
-DOWN Inventory,$50.00,
-Total Inventory,$100.00,
-Current UP Ratio,50%,Balanced
-UP Deviation,0.00,0.50 - 0.50
-DOWN Deviation,0.00,0.50 - 0.50
-Inventory UP Weight,1.00,Balanced inventory
-Inventory DOWN Weight,1.00,Balanced inventory
-Price Override,UP >= 0.90,DOWN weight forced to 0
-Final UP Weight,1.00,
-Final DOWN Weight,0.00,Blocked by price threshold
-Final UP Trade,$9.75,$9.75 × 1.00
-Final DOWN Trade,SKIP,Weight forced to 0
-Result,UP only - price threshold active,Don't buy losing side when winner > 0.90
-
-EXAMPLE 4: Price 0.30/0.70 with 40% UP / 60% DOWN inventory
-Parameter,Value,Calculation
-UP Price,0.30,
-DOWN Price,0.70,
-Base UP Size,$3.75,$0.75 + (0.30 × 10)
-Base DOWN Size,$7.75,$0.75 + (0.70 × 10)
-UP Inventory,$40.00,
-DOWN Inventory,$60.00,
-Total Inventory,$100.00,
-Current UP Ratio,40%,$40 / $100
-Target Ratio,50%,
-UP Deviation,-0.10,0.40 - 0.50
-DOWN Deviation,+0.10,0.60 - 0.50
-UP Weight,1.00,1 - (-0.10 / 0.20) → clamped to 1.0
-DOWN Weight,0.50,1 - (0.10 / 0.20)
-Final UP Trade,$3.75,$3.75 × 1.00
-Final DOWN Trade,$3.88,$7.75 × 0.50
-Result,Both trade but DOWN reduced by 50%,Rebalancing toward 50/50
-
-SECTION 7: WEIGHT REDUCTION SCALE
+SECTION 8: WEIGHT REDUCTION SCALE
 ================================================================================
 This shows how weight decreases as inventory becomes more overweight
 
@@ -212,26 +205,131 @@ Deviation from Target,Weight Calculation,Weight Result,Trade % of Base
 +0.25 (25% overweight),1 - (0.25 / 0.20) = -0.25 → clamped,0.00,SKIP
 +0.30 (30% overweight),1 - (0.30 / 0.20) = -0.50 → clamped,0.00,SKIP
 
-SECTION 8: DECISION FLOWCHART (Text Version)
+SECTION 9: COMPLETE EXAMPLES WITH UNBALANCED INVENTORY
 ================================================================================
-Step 1: Calculate base trade sizes
-  UP Base = $0.75 + (UP_price × 10)
-  DOWN Base = $0.75 + (DOWN_price × 10)
 
-Step 2: Check price threshold (0.90)
-  IF UP_price > 0.90 THEN DOWN_weight = 0 (stop trading DOWN)
-  IF DOWN_price > 0.90 THEN UP_weight = 0 (stop trading UP)
+EXAMPLE 1: 15-Min Market - Price 0.60/0.40 with 60% UP / 40% DOWN inventory
+Parameter,Value,Calculation
+Market Type,15-Minute,
+UP Price,0.60,
+DOWN Price,0.40,
+Base UP Size,$7.45,$0.25 + (0.60 × 12)
+Base DOWN Size,$5.05,$0.25 + (0.40 × 12)
+UP Inventory,$60.00,
+DOWN Inventory,$40.00,
+Total Inventory,$100.00,
+Current UP Ratio,60%,$60 / $100
+Target Ratio,50%,
+UP Deviation,+0.10,0.60 - 0.50
+DOWN Deviation,-0.10,0.40 - 0.50
+UP Tilt Boost,1.25,UP price >= 0.59
+DOWN Tilt Boost,0.48,Progressive reduction (0.60 is 3.2% of way from 0.59 to 0.90)
+UP Weight,0.50,1 - (0.10 / 0.20)
+DOWN Weight,1.00,1 - (-0.10 / 0.20) → clamped to 1.0
+Final UP Trade,$4.66,$7.45 × 1.25 × 0.50
+Final DOWN Trade,$2.42,$5.05 × 0.48 × 1.00
+Result,Both trade but UP reduced by 50%,Rebalancing toward 50/50
 
-Step 3: Calculate inventory weights (if not blocked by step 2)
+EXAMPLE 2: 15-Min Market - Price 0.70/0.30 with 70% UP / 30% DOWN inventory
+Parameter,Value,Calculation
+Market Type,15-Minute,
+UP Price,0.70,
+DOWN Price,0.30,
+Base UP Size,$8.65,$0.25 + (0.70 × 12)
+Base DOWN Size,$3.85,$0.25 + (0.30 × 12)
+UP Inventory,$70.00,
+DOWN Inventory,$30.00,
+Total Inventory,$100.00,
+Current UP Ratio,70%,$70 / $100
+Target Ratio,50%,
+UP Deviation,+0.20,0.70 - 0.50
+DOWN Deviation,-0.20,0.30 - 0.50
+UP Tilt Boost,1.25,UP price >= 0.59
+DOWN Tilt Boost,0.32,Progressive reduction (0.70 is 35.5% of way from 0.59 to 0.90)
+UP Weight,0.00,1 - (0.20 / 0.20) = 0
+DOWN Weight,1.00,1 - (-0.20 / 0.20) → clamped to 1.0
+Final UP Trade,SKIP,Weight is 0
+Final DOWN Trade,$1.23,$3.85 × 0.32 × 1.00
+Result,DOWN only - UP at max skew,Aggressively rebalancing to DOWN
+
+EXAMPLE 3: 1-Hour Market - Price 0.90/0.10 with 50% UP / 50% DOWN inventory
+Parameter,Value,Calculation
+Market Type,1-Hour,
+UP Price,0.90,
+DOWN Price,0.10,
+Base UP Size,$7.70,$0.50 + (0.90 × 8)
+Base DOWN Size,$1.30,$0.50 + (0.10 × 8)
+UP Inventory,$50.00,
+DOWN Inventory,$50.00,
+Total Inventory,$100.00,
+Current UP Ratio,50%,Balanced
+UP Deviation,0.00,0.50 - 0.50
+DOWN Deviation,0.00,0.50 - 0.50
+Inventory UP Weight,1.00,Balanced inventory
+Inventory DOWN Weight,1.00,Balanced inventory
+UP Tilt Boost,1.25,UP price >= 0.59
+DOWN Tilt Boost,0.00,UP >= 0.90: DOWN blocked completely
+Price Override,UP >= 0.90,DOWN weight forced to 0
+Final UP Weight,1.00,
+Final DOWN Weight,0.00,Blocked by price threshold
+Final UP Trade,$9.63,$7.70 × 1.25 × 1.00
+Final DOWN Trade,SKIP,Weight forced to 0
+Result,UP only - price threshold active,Don't buy losing side when winner > 0.90
+
+EXAMPLE 4: 15-Min Market - Price 0.30/0.70 with 40% UP / 60% DOWN inventory
+Parameter,Value,Calculation
+Market Type,15-Minute,
+UP Price,0.30,
+DOWN Price,0.70,
+Base UP Size,$3.85,$0.25 + (0.30 × 12)
+Base DOWN Size,$8.65,$0.25 + (0.70 × 12)
+UP Inventory,$40.00,
+DOWN Inventory,$60.00,
+Total Inventory,$100.00,
+Current UP Ratio,40%,$40 / $100
+Target Ratio,50%,
+UP Deviation,-0.10,0.40 - 0.50
+DOWN Deviation,+0.10,0.60 - 0.50
+UP Tilt Boost,1.00,UP price < 0.59 (no tilt)
+DOWN Tilt Boost,1.25,DOWN price >= 0.59
+UP Weight,1.00,1 - (-0.10 / 0.20) → clamped to 1.0
+DOWN Weight,0.50,1 - (0.10 / 0.20)
+Final UP Trade,$3.85,$3.85 × 1.00 × 1.00
+Final DOWN Trade,$5.41,$8.65 × 1.25 × 0.50
+Result,Both trade but DOWN reduced by 50%,Rebalancing toward 50/50
+
+SECTION 10: DECISION FLOWCHART (Text Version)
+================================================================================
+Step 1: Determine market type (1-hour or 15-minute)
+  IF market_type is "bitcoin-up-or-down" OR "ethereum-up-or-down" THEN use 1-hour sizing
+  IF market_type is "btc-updown-15m" OR "eth-updown-15m" THEN use 15-minute sizing
+
+Step 2: Calculate base trade sizes
+  1-Hour: base = $0.50 + (price × 8.00), clamped $0.01-$14.00
+  15-Minute: base = $0.25 + (price × 12.00), clamped $0.01-$26.00
+
+Step 3: Check price stop threshold (0.90)
+  IF UP_price >= 0.90 THEN DOWN_weight = 0 (stop trading DOWN)
+  IF DOWN_price >= 0.90 THEN UP_weight = 0 (stop trading UP)
+
+Step 4: Apply tilt boost (if not blocked by step 3)
+  IF UP_price >= 0.59 THEN
+    UP_boost = 1.25
+    DOWN_boost = 0.5 × (1 - tiltProgress) where tiltProgress = (UP_price - 0.59) / (0.90 - 0.59)
+  IF DOWN_price >= 0.59 THEN
+    DOWN_boost = 1.25
+    UP_boost = 0.5 × (1 - tiltProgress) where tiltProgress = (DOWN_price - 0.59) / (0.90 - 0.59)
+
+Step 5: Calculate inventory weights (if not blocked by step 3)
   UP_deviation = current_UP_ratio - 0.50
   DOWN_deviation = current_DOWN_ratio - 0.50
   UP_weight = max(0, min(1, 1 - (UP_deviation / 0.20)))
   DOWN_weight = max(0, min(1, 1 - (DOWN_deviation / 0.20)))
 
-Step 4: Calculate final trade amounts
-  Final_UP_trade = UP_base × UP_weight
-  Final_DOWN_trade = DOWN_base × DOWN_weight
+Step 6: Calculate final trade amounts
+  Final_UP_trade = base_UP × UP_tilt_boost × UP_weight
+  Final_DOWN_trade = base_DOWN × DOWN_tilt_boost × DOWN_weight
 
-Step 5: Execute trades
+Step 7: Execute trades
   IF Final_UP_trade >= $0.01 THEN place UP order
   IF Final_DOWN_trade >= $0.01 THEN place DOWN order
