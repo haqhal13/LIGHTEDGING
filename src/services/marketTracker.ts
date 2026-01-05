@@ -2586,6 +2586,8 @@ class MarketTracker {
     private lastProactiveDiscovery = 0;
     private proactiveDiscoveryInterval = 1000; // Check every 1 second for fast switching
     private discoveredSlugs: Set<string> = new Set(); // Track already discovered slugs
+    private lastProcessedWindow = 0; // Track last 15-min window to detect changes
+    private lastHourProcessed = -1; // Track last hour to detect hour changes
 
     async proactivelyDiscover15MinMarkets(): Promise<void> {
         const now = Date.now();
@@ -2596,11 +2598,57 @@ class MarketTracker {
         }
         this.lastProactiveDiscovery = now;
 
-        // Calculate current AND next 15-min window starts (like paper mode)
-        const current15MinStart = Math.floor(now / (15 * 60 * 1000)) * (15 * 60 * 1000);
-        const next15MinStart = current15MinStart + (15 * 60 * 1000);
+        // CRITICAL: Calculate 15-minute boundaries IN EASTERN TIME (markets start at :00, :15, :30, :45 ET)
+        // Polymarket uses ET time for market windows, not UTC!
+        const FIFTEEN_MIN_MS = 15 * 60 * 1000;
+
+        // Get current ET time components
+        const etTimeFormatter = new Intl.DateTimeFormat('en-US', {
+            timeZone: 'America/New_York',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false,
+        });
+        const etTimeParts = etTimeFormatter.formatToParts(new Date(now));
+        const currentETHour24 = parseInt(etTimeParts.find(p => p.type === 'hour')?.value || '0', 10);
+        const currentETMinute = parseInt(etTimeParts.find(p => p.type === 'minute')?.value || '0', 10);
+
+        // Calculate current 15-min window start minute (0, 15, 30, or 45)
+        const windowStartMinute = Math.floor(currentETMinute / 15) * 15;
+
+        // Get today's date in ET
+        const etDateFormatter = new Intl.DateTimeFormat('en-US', {
+            timeZone: 'America/New_York',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+        });
+        const etDateParts = etDateFormatter.formatToParts(new Date(now));
+        const etYear = parseInt(etDateParts.find(p => p.type === 'year')?.value || '2025', 10);
+        const etMonthNum = parseInt(etDateParts.find(p => p.type === 'month')?.value || '1', 10);
+        const etDayNum = parseInt(etDateParts.find(p => p.type === 'day')?.value || '1', 10);
+
+        // Create the window start as a date in ET, then convert to UTC timestamp
+        const windowStartETStr = `${etYear}-${String(etMonthNum).padStart(2, '0')}-${String(etDayNum).padStart(2, '0')}T${String(currentETHour24).padStart(2, '0')}:${String(windowStartMinute).padStart(2, '0')}:00`;
+        const tempWindowDate = new Date(windowStartETStr);
+        const etOffset = new Date(tempWindowDate.toLocaleString('en-US', { timeZone: 'America/New_York' })).getTime() -
+                         new Date(tempWindowDate.toLocaleString('en-US', { timeZone: 'UTC' })).getTime();
+        const current15MinStart = tempWindowDate.getTime() - etOffset;
+        const next15MinStart = current15MinStart + FIFTEEN_MIN_MS;
         const current15MinTimestamp = Math.floor(current15MinStart / 1000);
         const next15MinTimestamp = Math.floor(next15MinStart / 1000);
+
+        // CRITICAL: Clear the discovered slugs cache when a new window OR hour starts
+        // This ensures we immediately discover new markets (like EDGEBOTPRO)
+        const windowChanged = current15MinStart !== this.lastProcessedWindow;
+        const hourChanged = currentETHour24 !== this.lastHourProcessed;
+
+        if (windowChanged || hourChanged) {
+            this.discoveredSlugs.clear();
+            this.lastProcessedWindow = current15MinStart;
+            this.lastHourProcessed = currentETHour24;
+            console.log(`🔄 New ${windowChanged ? '15-min window' : 'hour'} detected! Scanning for new markets...`);
+        }
 
         // Generate expected slugs for BOTH current and next windows
         const slugsToCheck = [
