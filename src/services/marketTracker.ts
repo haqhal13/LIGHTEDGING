@@ -824,14 +824,37 @@ class MarketTracker {
             return; // Not a time-window market
         }
 
+        // CRITICAL: Determine if new market is 15-min or 1-hour
+        // Only remove markets of the SAME timeframe type
+        const newIs15Min = newMarket.marketKey.includes('-15') ||
+                          newMarket.marketSlug?.includes('updown-15m') ||
+                          /\d{1,2}:\d{2}\s*(?:am|pm)?\s*[-–]\s*\d{1,2}:\d{2}/i.test(newMarket.marketName);
+        const newIs1Hour = newMarket.marketKey.includes('-1h') ||
+                          /\d{1,2}\s*(?:am|pm)\s*et$/i.test(newMarket.marketSlug || '') ||
+                          (!newIs15Min && /\d{1,2}\s*(?:am|pm)\s*et/i.test(newMarket.marketName));
+
         const baseName = this.getBaseMarketName(newMarket.marketName);
-        
+
         // Find markets with the same base name but different (earlier) time windows
         const marketsToRemove: string[] = [];
-        
+
         for (const [key, market] of this.markets.entries()) {
             if (key === newMarket.marketKey) {
                 continue; // Don't remove the new market
+            }
+
+            // CRITICAL: Check if existing market is same timeframe type
+            const marketIs15Min = market.marketKey.includes('-15') ||
+                                 market.marketSlug?.includes('updown-15m') ||
+                                 /\d{1,2}:\d{2}\s*(?:am|pm)?\s*[-–]\s*\d{1,2}:\d{2}/i.test(market.marketName);
+            const marketIs1Hour = market.marketKey.includes('-1h') ||
+                                 /\d{1,2}\s*(?:am|pm)\s*et$/i.test(market.marketSlug || '') ||
+                                 (!marketIs15Min && /\d{1,2}\s*(?:am|pm)\s*et/i.test(market.marketName));
+
+            // ONLY remove markets of the SAME timeframe type
+            // 15-min markets should NOT affect 1-hour markets and vice versa
+            if (newIs15Min !== marketIs15Min || newIs1Hour !== marketIs1Hour) {
+                continue; // Different timeframe types - don't remove
             }
 
             const marketBaseName = this.getBaseMarketName(market.marketName);
@@ -841,19 +864,19 @@ class MarketTracker {
                     // Extract start times to compare
                     const newStart = newTimeWindow.split(/[-–]/)[0].trim();
                     const marketStart = marketTimeWindow.split(/[-–]/)[0].trim();
-                    
+
                     // Parse times (handle formats like "10:15", "10:15AM", "10:15 AM", etc.)
                     const parseTime = (timeStr: string): number | null => {
                         try {
                             const cleaned = timeStr.replace(/\s*[AP]M/i, '').trim();
                             const parts = cleaned.split(':');
                             if (parts.length !== 2) return null;
-                            
+
                             let hours = parseInt(parts[0], 10);
                             const minutes = parseInt(parts[1], 10);
-                            
+
                             if (isNaN(hours) || isNaN(minutes)) return null;
-                            
+
                             // Handle 12-hour format (if AM/PM was present, but we already removed it)
                             // For now, assume 24-hour format or that hours are already correct
                             return hours * 60 + minutes;
@@ -864,7 +887,7 @@ class MarketTracker {
 
                     const newStartMinutes = parseTime(newStart);
                     const marketStartMinutes = parseTime(marketStart);
-                    
+
                     // Only remove if we can successfully parse both times
                     if (newStartMinutes !== null && marketStartMinutes !== null) {
                         // Remove markets with earlier start times (previous time windows)
@@ -2855,19 +2878,33 @@ class MarketTracker {
 
             // Add new market (or update if exists)
             const existingMarket = this.markets.get(marketKey);
-            if (!existingMarket || existingMarket.marketSlug !== slug) {
+
+            // CRITICAL: For hourly markets, preserve ALL existing data if market exists with same slug
+            // Only reset for 15-min markets when the window changes (different slug)
+            if (existingMarket && existingMarket.marketSlug === slug) {
+                // Same market, same slug - just update metadata (don't reset position data)
+                existingMarket.endDate = endDate;
+                existingMarket.conditionId = conditionId;
+                existingMarket.assetUp = assetUp || existingMarket.assetUp;
+                existingMarket.assetDown = assetDown || existingMarket.assetDown;
+                existingMarket.lastUpdate = now;
+                this.discoveredSlugs.add(slug);
+            } else if (!existingMarket || (is15Min && existingMarket.marketSlug !== slug)) {
+                // New market OR 15-min market with different window (slug changed)
                 const newMarket: MarketStats = {
                     marketKey,
                     marketName,
                     marketSlug: slug,
-                    sharesUp: existingMarket?.sharesUp || 0,
-                    sharesDown: existingMarket?.sharesDown || 0,
-                    investedUp: existingMarket?.investedUp || 0,
-                    investedDown: existingMarket?.investedDown || 0,
-                    totalCostUp: existingMarket?.totalCostUp || 0,
-                    totalCostDown: existingMarket?.totalCostDown || 0,
-                    tradesUp: existingMarket?.tradesUp || 0,
-                    tradesDown: existingMarket?.tradesDown || 0,
+                    // For 15-min with new slug: reset to 0
+                    // For new markets: start at 0
+                    sharesUp: 0,
+                    sharesDown: 0,
+                    investedUp: 0,
+                    investedDown: 0,
+                    totalCostUp: 0,
+                    totalCostDown: 0,
+                    tradesUp: 0,
+                    tradesDown: 0,
                     lastUpdate: now,
                     endDate,
                     conditionId,

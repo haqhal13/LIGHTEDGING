@@ -345,19 +345,36 @@ class MarketDiscovery {
         let current: MarketInfo | null = null;
         let next: MarketInfo | null = null;
 
+        // Add 1 second buffer for boundary timing issues
+        const nowWithBuffer = now + 1000;
+
         for (const market of markets) {
           const startTime = new Date(market.start_time_iso).getTime();
           const endTime = new Date(market.end_date_iso).getTime();
 
+          // Market hasn't ended yet (with small buffer for exact boundary)
           if (endTime > now) {
-            if (startTime <= now) {
-              if (!current) current = market;
+            // Market has started (or is about to start within 1 second)
+            if (startTime <= nowWithBuffer) {
+              if (!current) {
+                current = market;
+              } else {
+                // If we already have a current, prefer the one that started earlier (closer to now)
+                const currentStart = new Date(current.start_time_iso).getTime();
+                if (startTime > currentStart && startTime <= now) {
+                  // This market started more recently but is still active - use it
+                  current = market;
+                }
+              }
             } else {
+              // Market hasn't started yet - it's a future market
               if (current && !next) {
                 next = market;
-                break;
               } else if (!current) {
+                // No current market found - use future market as fallback
                 current = market;
+                const secsUntilStart = Math.round((startTime - now) / 1000);
+                log('warn', `[${marketType}] Using FUTURE market as current (starts in ${secsUntilStart}s): ${market.question}`);
               }
             }
           }
@@ -365,7 +382,11 @@ class MarketDiscovery {
 
         if (current) {
           this.currentMarkets.set(marketType, current);
-          log('info', `[${marketType}] Current: ${current.question}`);
+          const startTime = new Date(current.start_time_iso).getTime();
+          const endTime = new Date(current.end_date_iso).getTime();
+          const secsLeft = Math.round((endTime - now) / 1000);
+          const hasStarted = startTime <= now;
+          log('info', `[${marketType}] Current: ${current.question} (${hasStarted ? secsLeft + 's left' : 'NOT STARTED'})`);
         }
         if (next) {
           this.nextMarkets.set(marketType, next);
@@ -775,9 +796,27 @@ class PriceStreamLogger {
       return;
     }
 
+    // Track which assets are new vs unchanged
+    const oldAssetSet = new Set(this.currentAssetIds);
+    const newAssetSet = new Set(assetIds);
+    const unchangedAssets = assetIds.filter(id => oldAssetSet.has(id));
+    const addedAssets = assetIds.filter(id => !oldAssetSet.has(id));
+    const removedAssets = this.currentAssetIds.filter(id => !newAssetSet.has(id));
+
+    log('info', `Market assets changed: ${addedAssets.length} added, ${removedAssets.length} removed, ${unchangedAssets.length} unchanged`);
+
     this.currentAssetIds = assetIds;
     this.initializeAssetStates(assetIds);
 
+    // If WebSocket is open and healthy, just re-subscribe instead of reconnecting
+    // This avoids the gap where prices are unavailable during reconnection
+    if (this.ws && this.ws.readyState === WebSocket.OPEN && this.isConnected) {
+      log('info', 'WebSocket open - re-subscribing to updated assets without reconnect');
+      this.subscribe();
+      return;
+    }
+
+    // Otherwise, close and reconnect
     if (this.ws) {
       this.ws.close(1000, 'Market switch');
     }
@@ -786,16 +825,33 @@ class PriceStreamLogger {
   }
 
   private initializeAssetStates(assetIds: string[]): void {
-    this.assetStates.clear();
-    for (const assetId of assetIds) {
-      this.assetStates.set(assetId, {
-        lastPrice: null,
-        bestBid: null,
-        bestAsk: null,
-        lastTradePrice: null,
-        marketConditionId: null,
-      });
+    // IMPORTANT: Don't clear all states - preserve existing states for unchanged assets
+    // This prevents price gaps during 15-min market rotations affecting 1-hour markets
+
+    const newAssetSet = new Set(assetIds);
+    const existingAssetIds = new Set(this.assetStates.keys());
+
+    // Remove states for assets no longer tracked
+    for (const existingId of existingAssetIds) {
+      if (!newAssetSet.has(existingId)) {
+        this.assetStates.delete(existingId);
+      }
     }
+
+    // Add states for new assets (preserve existing ones)
+    for (const assetId of assetIds) {
+      if (!this.assetStates.has(assetId)) {
+        this.assetStates.set(assetId, {
+          lastPrice: null,
+          bestBid: null,
+          bestAsk: null,
+          lastTradePrice: null,
+          marketConditionId: null,
+        });
+      }
+    }
+
+    log('info', `Asset states updated: ${this.assetStates.size} assets (${assetIds.length - existingAssetIds.size} new, ${existingAssetIds.size - (existingAssetIds.size - this.assetStates.size)} preserved)`);
   }
 
   private arraysEqual(a: string[], b: string[]): boolean {

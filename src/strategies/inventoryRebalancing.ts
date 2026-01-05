@@ -25,16 +25,45 @@ interface MarketState {
 }
 
 /**
- * Inventory-Balanced Rebalancing (Market-Maker Style) Strategy
+ * GABAGOOL22 Pure Market-Making Strategy
  *
- * NOW TRADES ON ALL 4 MARKETS:
+ * TRADES ON ALL 4 MARKETS:
  * - BTC 15-minute (btc-updown-15m)
  * - ETH 15-minute (eth-updown-15m)
  * - BTC 1-hour (bitcoin-up-or-down)
  * - ETH 1-hour (ethereum-up-or-down)
  *
- * Goal: Keep YES/NO inventory near a target split, and only "lean" toward one side
- * when price moves — so you can recover quickly if it flips.
+ * CORE SIZING FORMULA:
+ * - 15-Min: $0.25 + (price × $12.00), clamped $0.01-$26.00
+ * - 1-Hour: $0.50 + (price × $8.00), clamped $0.01-$14.00
+ *
+ * ASSET ALLOCATION (BTC vs ETH):
+ * - 15-min: BTC 76%, ETH 24% (3:1 ratio)
+ * - 1-hour: BTC 70%, ETH 30% (2.4:1 ratio)
+ *
+ * MARKET TIME ALLOCATION (15m vs 1h shifting by minutes into hour):
+ * - 00-14: 15m 83.3%, 1h 16.7% (5:1)
+ * - 15-29: 15m 85.7%, 1h 14.3% (6:1)
+ * - 30-44: 15m 87.5%, 1h 12.5% (7:1)
+ * - 45-59: 15m 95.0%, 1h 5.0% (19:1)
+ *
+ * KEY PRINCIPLES:
+ * - Trade BOTH sides (UP and DOWN) at ALL prices (0.01 to 0.99)
+ * - Never stop trading either side based on price
+ * - No directional prediction - pure market making
+ * - 50/50 split between UP and DOWN trades
+ * - Trades 24/7 with consistent behavior
+ *
+ * MARKET CLOSE BEHAVIOR:
+ * - Last 4 minutes: 75% fewer trades
+ * - Last 1 minute: 40% smaller trade sizes
+ * - Never completely stops until market closes
+ *
+ * THE MATHEMATICAL EDGE:
+ * - Buys MORE shares when price is LOW (cheap)
+ * - Buys FEWER shares when price is HIGH (expensive)
+ * - Average cost per share: ~$0.49 (below $0.50 = edge)
+ * - One side always wins at $1.00, you accumulated more at cheap prices
  */
 export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
   // State per market (keyed by marketType)
@@ -120,8 +149,16 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
     const yesPrice = priceStreamLogger.getMidPrice(yesTokenId);
     const noPrice = priceStreamLogger.getMidPrice(noTokenId);
 
-    // If WebSocket prices not available, skip this market
+    // If WebSocket prices not available, skip this market (with debug logging)
     if (yesPrice === null || noPrice === null) {
+      // Only log once per market per minute to avoid spam
+      const lastNullLogKey = `${marketType}_nullPrice`;
+      const lastNullLog = (this as any)[lastNullLogKey] || 0;
+      const now = Date.now();
+      if (now - lastNullLog > 60000) {
+        this.log(`[${this.getShortName(marketType)}] Waiting for prices... (UP token: ${yesTokenId.slice(0,8)}... price=${yesPrice}, DOWN token: ${noTokenId.slice(0,8)}... price=${noPrice})`);
+        (this as any)[lastNullLogKey] = now;
+      }
       return [];
     }
 
@@ -385,15 +422,27 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
   }
 
   /**
-   * RATIO-WEIGHTED DUAL-SIDE TRADING: Trade both sides weighted by inventory needs
-   * Trade sizing formula: $0.75 + (price × 10), clamped to $0.01-$26.00
+   * GABAGOOL22 PURE MARKET-MAKING: Trade both sides at ALL prices
    *
-   * Strategy:
-   * - Calculate base trade size for each side using the formula
-   * - Weight trades based on how far inventory is from target ratio
-   * - Side with less inventory gets traded more aggressively
-   * - Can skip a side if it's already overweight (above target ratio)
-   * - STOP trading the losing side when winning side price > 0.90
+   * SIZING FORMULAS:
+   * - 15-Min: $0.25 + (price × $12.00), clamped $0.01-$26.00
+   * - 1-Hour: $0.50 + (price × $8.00), clamped $0.01-$14.00
+   *
+   * ASSET ALLOCATION:
+   * - 15-min: BTC 76%, ETH 24%
+   * - 1-hour: BTC 70%, ETH 30%
+   *
+   * MARKET TIME ALLOCATION (based on minutes into hour):
+   * - 00-14: 15m 83.3%, 1h 16.7% (5:1)
+   * - 15-29: 15m 85.7%, 1h 14.3% (6:1)
+   * - 30-44: 15m 87.5%, 1h 12.5% (7:1)
+   * - 45-59: 15m 95.0%, 1h 5.0% (19:1)
+   *
+   * KEY PRINCIPLES:
+   * - No directional prediction - pure market making
+   * - 50/50 split between UP and DOWN trades
+   * - Never stop trading either side based on price
+   * - Trades 24/7 with consistent behavior
    */
   private calculateDualSideSignals(
     state: MarketState,
@@ -406,157 +455,133 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
   ): TradeSignal[] {
     const { market, yesTokenId, noTokenId, marketType } = state;
     const signals: TradeSignal[] = [];
+    const config = this.rebalanceConfig;
 
     // Check if we have enough balance
-    if (this.balance < this.rebalanceConfig.min_trade_size) {
+    if (this.balance < config.min_trade_size) {
       return signals;
     }
 
-    // Price stop threshold used for tilt progress calculation
-    const priceStopThreshold = this.rebalanceConfig.price_stop_threshold;
+    // Calculate base trade sizes using gabagool22 formula: base + (price × multiplier)
+    const baseUpAmount = this.calculateTradeSize(yesPrice, marketType);
+    const baseDownAmount = this.calculateTradeSize(noPrice, marketType);
 
-    // Calculate base trade sizes using formula: base + (price × multiplier)
-    // Apply close size multiplier for near-close behavior (15m markets)
-    const baseUpAmount = this.calculateTradeSize(yesPrice, marketType) * closeSizeMultiplier;
-    const baseDownAmount = this.calculateTradeSize(noPrice, marketType) * closeSizeMultiplier;
+    // Apply close size multiplier for near-close behavior
+    let upAmount = baseUpAmount * closeSizeMultiplier;
+    let downAmount = baseDownAmount * closeSizeMultiplier;
 
-    // TILT BOOST: When one side >= tilt_threshold, boost trades on winning side
-    // WATCHER STYLE: Never stop one side completely, just favor the cheaper side
-    const tiltThreshold = this.rebalanceConfig.tilt_threshold;
-    const tiltBoost = this.rebalanceConfig.tilt_boost_multiplier;
+    // GABAGOOL22 ASSET ALLOCATION: Scale by BTC/ETH allocation
+    const assetAllocation = this.getAssetAllocation(marketType);
+    upAmount *= assetAllocation;
+    downAmount *= assetAllocation;
 
-    let upBoost = 1.0;
-    let downBoost = 1.0;
-
-    // WATCHER BEHAVIOR: Always trade BOTH sides, but favor cheaper side (55/45 split)
-    // When price < 0.46: favor buying that side
-    // When price > 0.54: favor buying opposite (cheaper) side
-    // Never stop one side completely
-
-    if (yesPrice >= tiltThreshold) {
-      upBoost = tiltBoost;  // Boost UP trades when UP is winning
-      // Reduce DOWN but NEVER to zero - minimum 0.15x (watcher never stops a side)
-      const tiltProgress = Math.min(1, (yesPrice - tiltThreshold) / (priceStopThreshold - tiltThreshold));
-      downBoost = Math.max(0.15, 0.5 * (1 - tiltProgress));  // 0.5 → 0.15 as price goes 0.59 → 0.90+
+    // GABAGOOL22 MARKET TIME ALLOCATION: Scale by 15m/1h time-based allocation
+    if (config.market_time_allocation_enabled) {
+      const timeAllocation = this.getMarketTimeAllocation(marketType);
+      upAmount *= timeAllocation;
+      downAmount *= timeAllocation;
     }
-    if (noPrice >= tiltThreshold) {
-      downBoost = tiltBoost;  // Boost DOWN trades when DOWN is winning
-      // Reduce UP but NEVER to zero - minimum 0.15x
-      const tiltProgress = Math.min(1, (noPrice - tiltThreshold) / (priceStopThreshold - tiltThreshold));
-      upBoost = Math.max(0.15, 0.5 * (1 - tiltProgress));  // 0.5 → 0.15 as price goes 0.59 → 0.90+
-    }
-
-    // Apply boost to base amounts
-    const boostedUpAmount = baseUpAmount * upBoost;
-    const boostedDownAmount = baseDownAmount * downBoost;
-
-    const totalInventory = inventory.yesValue + inventory.noValue;
-
-    // Calculate how much each side deviates from target
-    // If target is 0.5 (50/50), and current YES is 0.7 (70%), YES is +0.2 overweight
-    // Negative means underweight (needs more), positive means overweight (skip or reduce)
-    let yesDeviation = 0;
-    let noDeviation = 0;
-
-    if (totalInventory > 0) {
-      yesDeviation = currentYesRatio - targetRatio;  // Positive = overweight
-      noDeviation = (1 - currentYesRatio) - (1 - targetRatio);  // Positive = overweight
-    }
-
-    // Calculate weight multipliers based on deviation
-    // Underweight side gets full weight (1.0), overweight gets reduced (can be 0)
-    // Weight = 1 - (deviation / max_skew_ratio), clamped 0-1
-    const maxSkew = this.rebalanceConfig.max_skew_ratio;
-
-    // YES weight: if underweight (negative deviation), weight = 1.0
-    // If overweight, reduce weight proportionally
-    let yesWeight = Math.max(0, Math.min(1, 1 - (yesDeviation / maxSkew)));
-    let noWeight = Math.max(0, Math.min(1, 1 - (noDeviation / maxSkew)));
-
-    // WATCHER BEHAVIOR: Never stop one side completely
-    // Just apply the tilt boost/reduction from above
-    // The 0.15x minimum ensures we always trade both sides
-
-    // Apply weights to BOOSTED trade amounts
-    const upTradeAmount = boostedUpAmount * yesWeight;
-    const downTradeAmount = boostedDownAmount * noWeight;
 
     let remainingBalance = this.balance;
 
-    // Generate UP (YES) signal if weighted amount is sufficient
-    if (upTradeAmount >= this.rebalanceConfig.min_trade_size && remainingBalance >= upTradeAmount) {
-      const tradeSize = upTradeAmount / yesPrice;
+    // PURE 50/50 MARKET MAKING: Trade BOTH sides at ALL prices
+    // No tilt, no inventory weighting - just the formula
+
+    // Generate UP (YES) signal
+    if (upAmount >= config.min_trade_size && remainingBalance >= upAmount) {
+      const tradeSize = upAmount / yesPrice;
       if (tradeSize >= 0.01) {
         const tradePrice = this.calculateOrderPrice(yesPrice, "BUY");
         signals.push(this.createBuySignal(market, yesTokenId, tradePrice, Math.floor(tradeSize * 100) / 100, {
-          rebalance: true,
+          gabagool22: true,
           dualSideTrade: true,
-          weight: yesWeight,
-          tiltBoost: upBoost,
-          currentYesRatio,
-          targetRatio,
+          assetAllocation,
           outcome: "Up",
           marketType,
         }));
-        remainingBalance -= upTradeAmount;
+        remainingBalance -= upAmount;
       }
     }
 
-    // Generate DOWN (NO) signal if weighted amount is sufficient
-    if (downTradeAmount >= this.rebalanceConfig.min_trade_size && remainingBalance >= downTradeAmount) {
-      const tradeSize = downTradeAmount / noPrice;
+    // Generate DOWN (NO) signal
+    if (downAmount >= config.min_trade_size && remainingBalance >= downAmount) {
+      const tradeSize = downAmount / noPrice;
       if (tradeSize >= 0.01) {
         const tradePrice = this.calculateOrderPrice(noPrice, "BUY");
         signals.push(this.createBuySignal(market, noTokenId, tradePrice, Math.floor(tradeSize * 100) / 100, {
-          rebalance: true,
+          gabagool22: true,
           dualSideTrade: true,
-          weight: noWeight,
-          tiltBoost: downBoost,
-          currentYesRatio,
-          targetRatio,
+          assetAllocation,
           outcome: "Down",
           marketType,
         }));
       }
     }
 
-    // If no trades due to weighting, but we have balance and one side is very underweight
-    // Force a trade on the underweight side to maintain some inventory balance (with tilt boost)
-    if (signals.length === 0 && this.balance >= this.rebalanceConfig.min_trade_size) {
-      const buyYes = inventory.yesValue <= inventory.noValue;
+    return signals;
+  }
 
-      if (buyYes && boostedUpAmount >= this.rebalanceConfig.min_trade_size && this.balance >= boostedUpAmount) {
-        const tradeSize = boostedUpAmount / yesPrice;
-        if (tradeSize >= 0.01) {
-          const tradePrice = this.calculateOrderPrice(yesPrice, "BUY");
-          signals.push(this.createBuySignal(market, yesTokenId, tradePrice, Math.floor(tradeSize * 100) / 100, {
-            rebalance: true,
-            fallbackTrade: true,
-            tiltBoost: upBoost,
-            currentYesRatio,
-            targetRatio,
-            outcome: "Up",
-            marketType,
-          }));
-        }
-      } else if (!buyYes && boostedDownAmount >= this.rebalanceConfig.min_trade_size && this.balance >= boostedDownAmount) {
-        const tradeSize = boostedDownAmount / noPrice;
-        if (tradeSize >= 0.01) {
-          const tradePrice = this.calculateOrderPrice(noPrice, "BUY");
-          signals.push(this.createBuySignal(market, noTokenId, tradePrice, Math.floor(tradeSize * 100) / 100, {
-            rebalance: true,
-            fallbackTrade: true,
-            tiltBoost: downBoost,
-            currentYesRatio,
-            targetRatio,
-            outcome: "Down",
-            marketType,
-          }));
-        }
-      }
+  /**
+   * Get asset allocation multiplier for BTC vs ETH
+   * 15-min: BTC 76%, ETH 24%
+   * 1-hour: BTC 70%, ETH 30%
+   */
+  private getAssetAllocation(marketType: string): number {
+    const config = this.rebalanceConfig;
+    const is15m = this.is15MinuteMarket(marketType);
+    const isBTC = marketType.includes('btc') || marketType.includes('bitcoin');
+
+    if (is15m) {
+      return isBTC ? config.btc_allocation_15m : config.eth_allocation_15m;
+    } else {
+      return isBTC ? config.btc_allocation_1h : config.eth_allocation_1h;
+    }
+  }
+
+  /**
+   * Get market time allocation multiplier based on minutes into the hour
+   * As 1-hour market approaches close, shift volume to 15-min markets
+   *
+   * | Minutes | 15-min Market | 1-hour Market | Ratio |
+   * |---------|---------------|---------------|-------|
+   * | 00-14   | 83.3%         | 16.7%         | 5:1   |
+   * | 15-29   | 85.7%         | 14.3%         | 6:1   |
+   * | 30-44   | 87.5%         | 12.5%         | 7:1   |
+   * | 45-59   | 95.0%         | 5.0%          | 19:1  |
+   */
+  private getMarketTimeAllocation(marketType: string): number {
+    const is15m = this.is15MinuteMarket(marketType);
+    const minutesIntoHour = new Date().getMinutes();
+
+    // Define ratios for each time window
+    let ratio15m: number;
+    let ratio1h: number;
+
+    if (minutesIntoHour < 15) {
+      // 00-14: 5:1 ratio
+      ratio15m = 5;
+      ratio1h = 1;
+    } else if (minutesIntoHour < 30) {
+      // 15-29: 6:1 ratio
+      ratio15m = 6;
+      ratio1h = 1;
+    } else if (minutesIntoHour < 45) {
+      // 30-44: 7:1 ratio
+      ratio15m = 7;
+      ratio1h = 1;
+    } else {
+      // 45-59: 19:1 ratio
+      ratio15m = 19;
+      ratio1h = 1;
     }
 
-    return signals;
+    const total = ratio15m + ratio1h;
+
+    if (is15m) {
+      return ratio15m / total;
+    } else {
+      return ratio1h / total;
+    }
   }
 
   private calculateOrderPrice(midPrice: number, side: "BUY" | "SELL"): number {

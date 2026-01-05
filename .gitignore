@@ -2,6 +2,7 @@ node_modules/
 dist/
 .env
 *.log
+*.csv
 .DS_Store
 coverage/
 .idea/

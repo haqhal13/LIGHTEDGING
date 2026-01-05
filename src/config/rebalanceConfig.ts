@@ -59,6 +59,15 @@ export interface RebalanceConfig {
   bell_curve_peak_multiplier: number;    // 1.50 at price 0.50
   bell_curve_extreme_multiplier: number; // 0.30 at price 0.10/0.90
 
+  // Gabagool22 asset allocation (BTC vs ETH)
+  btc_allocation_15m: number;  // 0.76 = 76% of 15m trades to BTC
+  eth_allocation_15m: number;  // 0.24 = 24% of 15m trades to ETH
+  btc_allocation_1h: number;   // 0.70 = 70% of 1h trades to BTC
+  eth_allocation_1h: number;   // 0.30 = 30% of 1h trades to ETH
+
+  // Gabagool22 market time allocation (15m vs 1h shifting)
+  market_time_allocation_enabled: boolean;
+
   // Market close behavior (15-minute markets)
   close_reduce_activity_minutes: number;
   close_activity_multiplier: number;
@@ -112,10 +121,17 @@ const DEFAULT_CONFIG: RebalanceConfig = {
   tilt_threshold: 0.59,
   tilt_boost_multiplier: 1.25,
   price_stop_threshold: 0.90,
-  // Bell curve sizing (maximize middle, minimize extremes)
-  bell_curve_enabled: true,
-  bell_curve_peak_multiplier: 1.50,
-  bell_curve_extreme_multiplier: 0.30,
+  // Bell curve sizing (disabled for gabagool22)
+  bell_curve_enabled: false,
+  bell_curve_peak_multiplier: 1.0,
+  bell_curve_extreme_multiplier: 1.0,
+  // Gabagool22 asset allocation
+  btc_allocation_15m: 0.76,
+  eth_allocation_15m: 0.24,
+  btc_allocation_1h: 0.70,
+  eth_allocation_1h: 0.30,
+  // Gabagool22 market time allocation
+  market_time_allocation_enabled: true,
   // Market close behavior (15-minute markets)
   close_reduce_activity_minutes: 4,
   close_activity_multiplier: 0.25,
