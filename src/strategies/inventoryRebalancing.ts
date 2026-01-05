@@ -25,7 +25,7 @@ interface MarketState {
 }
 
 /**
- * GABAGOOL22 Pure Market-Making Strategy
+ * DUAL-SIDE Market-Making Strategy with Bell Curve, Tilt, and Inventory Weighting
  *
  * TRADES ON ALL 4 MARKETS:
  * - BTC 15-minute (btc-updown-15m)
@@ -33,37 +33,32 @@ interface MarketState {
  * - BTC 1-hour (bitcoin-up-or-down)
  * - ETH 1-hour (ethereum-up-or-down)
  *
- * CORE SIZING FORMULA:
- * - 15-Min: $0.25 + (price × $12.00), clamped $0.01-$26.00
- * - 1-Hour: $0.50 + (price × $8.00), clamped $0.01-$14.00
+ * TRADE SIZING (4 layers applied in order):
  *
- * ASSET ALLOCATION (BTC vs ETH):
- * - 15-min: BTC 76%, ETH 24% (3:1 ratio)
- * - 1-hour: BTC 70%, ETH 30% (2.4:1 ratio)
+ * 1. BASE SIZING (price-based):
+ *    - 15-Min: $0.50 + (price × 16.00), clamped $0.50-$35.00
+ *    - 1-Hour: $1.00 + (price × 12.00), clamped $0.50-$20.00
  *
- * MARKET TIME ALLOCATION (15m vs 1h shifting by minutes into hour):
- * - 00-14: 15m 83.3%, 1h 16.7% (5:1)
- * - 15-29: 15m 85.7%, 1h 14.3% (6:1)
- * - 30-44: 15m 87.5%, 1h 12.5% (7:1)
- * - 45-59: 15m 95.0%, 1h 5.0% (19:1)
+ * 2. BELL CURVE (trade more at 0.50, less at extremes):
+ *    - Peak at 0.50: 1.75x multiplier
+ *    - Extremes (0.10, 0.90): 0.40x multiplier
+ *    - Formula: 0.40 + (1.75 - 0.40) × (1 - |price - 0.5| × 2)
  *
- * KEY PRINCIPLES:
- * - Trade BOTH sides (UP and DOWN) at ALL prices (0.01 to 0.99)
- * - Never stop trading either side based on price
- * - No directional prediction - pure market making
- * - 50/50 split between UP and DOWN trades
- * - Trades 24/7 with consistent behavior
+ * 3. TILT BOOST (favor winning side, NEVER stop losing side):
+ *    - Price < 0.59: 1.0x both sides
+ *    - Price >= 0.59: Winning side 1.25x, losing side 0.5x→0.15x (minimum)
+ *    - NEVER stops trading either side (watcher style)
  *
- * MARKET CLOSE BEHAVIOR:
- * - Last 4 minutes: 75% fewer trades
- * - Last 1 minute: 40% smaller trade sizes
- * - Never completely stops until market closes
+ * 4. INVENTORY WEIGHTING (rebalance toward 50/50):
+ *    - Underweight side: 1.0x (full trading)
+ *    - Overweight side: Reduced proportionally
+ *    - At 20% overweight: 0x (skip trading that side)
+ *    - Formula: weight = 1 - (deviation / 0.20), clamped 0-1
  *
- * THE MATHEMATICAL EDGE:
- * - Buys MORE shares when price is LOW (cheap)
- * - Buys FEWER shares when price is HIGH (expensive)
- * - Average cost per share: ~$0.49 (below $0.50 = edge)
- * - One side always wins at $1.00, you accumulated more at cheap prices
+ * EXAMPLE at UP=$0.70, DOWN=$0.30, balanced inventory:
+ *   Base UP: $11.70 × 0.94 (bell) × 1.25 (tilt) × 1.0 (weight) = $13.75
+ *   Base DOWN: $5.30 × 0.94 (bell) × 0.27 (tilt) × 1.0 (weight) = $1.34
+ *   → Both sides trade, UP boosted, DOWN reduced but NOT stopped
  */
 export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
   // State per market (keyed by marketType)
@@ -239,9 +234,11 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
 
   /**
    * Initialize all markets from priceStreamLogger
+   * Also checks next markets (discovered in advance) for seamless switching
    */
   private async initializeAllMarkets(): Promise<void> {
     const streamMarkets = priceStreamLogger.getCurrentMarkets();
+    const nextMarkets = priceStreamLogger.getNextMarkets();
 
     if (streamMarkets.size === 0) {
       // Wait a bit for priceStreamLogger to discover markets
@@ -258,11 +255,31 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
       if (missingTypes.length > 0) {
         this.log(`[DEBUG] priceStreamLogger has ${streamMarkets.size} markets: [${foundTypes.join(', ')}]`);
         this.log(`[DEBUG] Missing market types: [${missingTypes.join(', ')}]`);
+
+        // Check if next markets are available for the missing types
+        const nextAvailable = missingTypes.filter(t => nextMarkets.has(t));
+        if (nextAvailable.length > 0) {
+          this.log(`[DEBUG] 🔮 Next markets ready for: [${nextAvailable.join(', ')}]`);
+        }
       }
     }
 
     for (const marketType of InventoryBalancedRebalancingStrategy.MARKET_TYPES) {
-      const wsMarket = streamMarkets.get(marketType);
+      // Try current market first, then fall back to next market if current is missing
+      let wsMarket = streamMarkets.get(marketType);
+
+      // If current market not available, check if next market is ready and should start soon
+      if (!wsMarket && nextMarkets.has(marketType)) {
+        const nextMarket = nextMarkets.get(marketType)!;
+        const startTime = new Date(nextMarket.start_time_iso).getTime();
+        const secsUntilStart = Math.round((startTime - Date.now()) / 1000);
+
+        // Use next market if it starts within 30 seconds (pre-initialize)
+        if (secsUntilStart <= 30) {
+          this.log(`[${this.getShortName(marketType)}] 🔮 Pre-initializing next market (starts in ${secsUntilStart}s): ${nextMarket.question}`);
+          wsMarket = nextMarket;
+        }
+      }
 
       if (!wsMarket) {
         continue; // Market not available yet
@@ -422,27 +439,15 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
   }
 
   /**
-   * GABAGOOL22 PURE MARKET-MAKING: Trade both sides at ALL prices
+   * DUAL-SIDE TRADING: Trade BOTH sides every cycle with Bell Curve, Tilt, and Inventory Weighting
    *
-   * SIZING FORMULAS:
-   * - 15-Min: $0.25 + (price × $12.00), clamped $0.01-$26.00
-   * - 1-Hour: $0.50 + (price × $8.00), clamped $0.01-$14.00
+   * LAYERS APPLIED IN ORDER:
+   * 1. Base sizing: $base + (price × multiplier)
+   * 2. Bell curve: Peak at 0.50 (1.75x), extremes (0.40x)
+   * 3. Tilt boost: Winning side 1.25x, losing side 0.5x→0.15x (NEVER 0)
+   * 4. Inventory weight: Reduce overweight side, skip at 20%+ deviation
    *
-   * ASSET ALLOCATION:
-   * - 15-min: BTC 76%, ETH 24%
-   * - 1-hour: BTC 70%, ETH 30%
-   *
-   * MARKET TIME ALLOCATION (based on minutes into hour):
-   * - 00-14: 15m 83.3%, 1h 16.7% (5:1)
-   * - 15-29: 15m 85.7%, 1h 14.3% (6:1)
-   * - 30-44: 15m 87.5%, 1h 12.5% (7:1)
-   * - 45-59: 15m 95.0%, 1h 5.0% (19:1)
-   *
-   * KEY PRINCIPLES:
-   * - No directional prediction - pure market making
-   * - 50/50 split between UP and DOWN trades
-   * - Never stop trading either side based on price
-   * - Trades 24/7 with consistent behavior
+   * NEVER STOPS TRADING EITHER SIDE (except inventory at max skew)
    */
   private calculateDualSideSignals(
     state: MarketState,
@@ -450,7 +455,7 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
     yesPrice: number,
     noPrice: number,
     currentYesRatio: number,
-    targetRatio: number,
+    _targetRatio: number,
     closeSizeMultiplier: number = 1.0
   ): TradeSignal[] {
     const { market, yesTokenId, noTokenId, marketType } = state;
@@ -462,55 +467,97 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
       return signals;
     }
 
-    // Calculate base trade sizes using gabagool22 formula: base + (price × multiplier)
-    const baseUpAmount = this.calculateTradeSize(yesPrice, marketType);
-    const baseDownAmount = this.calculateTradeSize(noPrice, marketType);
+    // ========================================================================
+    // STEP 1: BASE SIZING (price-based formula)
+    // ========================================================================
+    // 15-Min: $0.50 + (price × 16.00), clamped $0.50-$35.00
+    // 1-Hour: $1.00 + (price × 12.00), clamped $0.50-$20.00
+    let baseUpAmount = this.calculateTradeSize(yesPrice, marketType);
+    let baseDownAmount = this.calculateTradeSize(noPrice, marketType);
+
+    // ========================================================================
+    // STEP 2: BELL CURVE (trade more at 0.50, less at extremes)
+    // ========================================================================
+    // Formula: extreme + (peak - extreme) × (1 - |price - 0.5| × 2)
+    // Peak at 0.50: 1.75x, Extremes: 0.40x
+    const bellCurveUp = this.calculateBellCurveMultiplier(yesPrice, config);
+    const bellCurveDown = this.calculateBellCurveMultiplier(noPrice, config);
+
+    baseUpAmount *= bellCurveUp;
+    baseDownAmount *= bellCurveDown;
+
+    // ========================================================================
+    // STEP 3: TILT BOOST (favor winning side, NEVER stop losing side)
+    // ========================================================================
+    // Winning side (price >= 0.59): 1.25x boost
+    // Losing side: Progressive reduction from 0.5x to 0.15x minimum (NEVER 0)
+    const { upTilt, downTilt } = this.calculateTiltMultipliers(yesPrice, noPrice, config);
+
+    baseUpAmount *= upTilt;
+    baseDownAmount *= downTilt;
+
+    // ========================================================================
+    // STEP 4: INVENTORY WEIGHTING (rebalance toward 50/50)
+    // ========================================================================
+    // Underweight side: 1.0x (full trading)
+    // Overweight side: Reduced proportionally, 0x at 20%+ deviation
+    // Formula: weight = 1 - (deviation / max_skew_ratio), clamped 0-1
+    const { upWeight, downWeight } = this.calculateInventoryWeights(
+      inventory, currentYesRatio, config
+    );
+
+    let finalUpAmount = baseUpAmount * upWeight;
+    let finalDownAmount = baseDownAmount * downWeight;
 
     // Apply close size multiplier for near-close behavior
-    let upAmount = baseUpAmount * closeSizeMultiplier;
-    let downAmount = baseDownAmount * closeSizeMultiplier;
+    finalUpAmount *= closeSizeMultiplier;
+    finalDownAmount *= closeSizeMultiplier;
 
-    // GABAGOOL22 ASSET ALLOCATION: Scale by BTC/ETH allocation
+    // ASSET ALLOCATION: Scale by BTC/ETH allocation
     const assetAllocation = this.getAssetAllocation(marketType);
-    upAmount *= assetAllocation;
-    downAmount *= assetAllocation;
+    finalUpAmount *= assetAllocation;
+    finalDownAmount *= assetAllocation;
 
-    // GABAGOOL22 MARKET TIME ALLOCATION: Scale by 15m/1h time-based allocation
+    // MARKET TIME ALLOCATION: Scale by 15m/1h time-based allocation
     if (config.market_time_allocation_enabled) {
       const timeAllocation = this.getMarketTimeAllocation(marketType);
-      upAmount *= timeAllocation;
-      downAmount *= timeAllocation;
+      finalUpAmount *= timeAllocation;
+      finalDownAmount *= timeAllocation;
     }
+
+    // Log the trade calculation
+    this.log(`[${this.getShortName(marketType)}] UP: $${finalUpAmount.toFixed(2)} (bell=${bellCurveUp.toFixed(2)} tilt=${upTilt.toFixed(2)} wt=${upWeight.toFixed(2)}) | DOWN: $${finalDownAmount.toFixed(2)} (bell=${bellCurveDown.toFixed(2)} tilt=${downTilt.toFixed(2)} wt=${downWeight.toFixed(2)}) @ UP=$${yesPrice.toFixed(2)}/DOWN=$${noPrice.toFixed(2)}`);
 
     let remainingBalance = this.balance;
 
-    // PURE 50/50 MARKET MAKING: Trade BOTH sides at ALL prices
-    // No tilt, no inventory weighting - just the formula
-
     // Generate UP (YES) signal
-    if (upAmount >= config.min_trade_size && remainingBalance >= upAmount) {
-      const tradeSize = upAmount / yesPrice;
+    if (finalUpAmount >= config.min_trade_size && remainingBalance >= finalUpAmount) {
+      const tradeSize = finalUpAmount / yesPrice;
       if (tradeSize >= 0.01) {
         const tradePrice = this.calculateOrderPrice(yesPrice, "BUY");
         signals.push(this.createBuySignal(market, yesTokenId, tradePrice, Math.floor(tradeSize * 100) / 100, {
-          gabagool22: true,
-          dualSideTrade: true,
+          dualSide: true,
+          bellCurve: bellCurveUp,
+          tiltBoost: upTilt,
+          inventoryWeight: upWeight,
           assetAllocation,
           outcome: "Up",
           marketType,
         }));
-        remainingBalance -= upAmount;
+        remainingBalance -= finalUpAmount;
       }
     }
 
     // Generate DOWN (NO) signal
-    if (downAmount >= config.min_trade_size && remainingBalance >= downAmount) {
-      const tradeSize = downAmount / noPrice;
+    if (finalDownAmount >= config.min_trade_size && remainingBalance >= finalDownAmount) {
+      const tradeSize = finalDownAmount / noPrice;
       if (tradeSize >= 0.01) {
         const tradePrice = this.calculateOrderPrice(noPrice, "BUY");
         signals.push(this.createBuySignal(market, noTokenId, tradePrice, Math.floor(tradeSize * 100) / 100, {
-          gabagool22: true,
-          dualSideTrade: true,
+          dualSide: true,
+          bellCurve: bellCurveDown,
+          tiltBoost: downTilt,
+          inventoryWeight: downWeight,
           assetAllocation,
           outcome: "Down",
           marketType,
@@ -519,6 +566,92 @@ export class InventoryBalancedRebalancingStrategy extends BaseStrategy {
     }
 
     return signals;
+  }
+
+  /**
+   * Calculate bell curve multiplier for a price
+   * Peak at 0.50 (1.75x), extremes at 0.10/0.90 (0.40x)
+   * Formula: extreme + (peak - extreme) × max(0, 1 - |price - 0.5| × 2)
+   */
+  private calculateBellCurveMultiplier(price: number, config: RebalanceConfig): number {
+    if (!config.bell_curve_enabled) {
+      return 1.0;
+    }
+
+    const peak = config.bell_curve_peak_multiplier;     // 1.75
+    const extreme = config.bell_curve_extreme_multiplier; // 0.40
+    const distanceFromCenter = Math.abs(price - 0.5);
+
+    // Linear interpolation: at center (distance=0) → peak, at edge (distance=0.5) → extreme
+    const multiplier = extreme + (peak - extreme) * Math.max(0, 1 - distanceFromCenter * 2);
+    return multiplier;
+  }
+
+  /**
+   * Calculate tilt multipliers for UP and DOWN sides (WATCHER STYLE - NEVER STOPS)
+   * - Winning side (price >= tilt_threshold): Gets boost (1.25x)
+   * - Losing side: Progressive reduction from 0.5x to 0.15x minimum (NEVER 0)
+   */
+  private calculateTiltMultipliers(
+    upPrice: number,
+    downPrice: number,
+    config: RebalanceConfig
+  ): { upTilt: number; downTilt: number } {
+    const tiltThreshold = config.tilt_threshold;        // 0.59
+    const boostMultiplier = config.tilt_boost_multiplier; // 1.25
+    const stopThreshold = config.price_stop_threshold;   // 0.90 (used for progress calc, NOT stopping)
+
+    let upTilt = 1.0;
+    let downTilt = 1.0;
+
+    // Check if UP is winning (high UP price)
+    if (upPrice >= tiltThreshold) {
+      // UP gets boost
+      upTilt = boostMultiplier;
+      // DOWN gets progressive reduction: 0.5x at threshold → 0.15x at stopThreshold
+      const tiltProgress = Math.min(1, (upPrice - tiltThreshold) / (stopThreshold - tiltThreshold));
+      downTilt = Math.max(0.15, 0.5 - (tiltProgress * 0.35));
+    }
+
+    // Check if DOWN is winning (high DOWN price)
+    if (downPrice >= tiltThreshold) {
+      // DOWN gets boost
+      downTilt = boostMultiplier;
+      // UP gets progressive reduction: 0.5x at threshold → 0.15x at stopThreshold
+      const tiltProgress = Math.min(1, (downPrice - tiltThreshold) / (stopThreshold - tiltThreshold));
+      upTilt = Math.max(0.15, 0.5 - (tiltProgress * 0.35));
+    }
+
+    return { upTilt, downTilt };
+  }
+
+  /**
+   * Calculate inventory weights for rebalancing toward 50/50
+   * - Underweight side: 1.0x (full trading)
+   * - Overweight side: Reduced proportionally
+   * - At max_skew_ratio (20%) overweight: 0x (skip trading)
+   * Formula: weight = 1 - (deviation / max_skew_ratio), clamped 0-1
+   */
+  private calculateInventoryWeights(
+    inventory: { yesSize: number; noSize: number; yesValue: number; noValue: number },
+    currentYesRatio: number,
+    config: RebalanceConfig
+  ): { upWeight: number; downWeight: number } {
+    const targetRatio = config.target_yes_ratio;      // 0.50
+    const maxSkew = config.max_skew_ratio;            // 0.20
+
+    // Calculate deviations from target
+    const upDeviation = currentYesRatio - targetRatio;
+    const downDeviation = (1 - currentYesRatio) - targetRatio;
+
+    // Calculate weights: reduce overweight side, keep underweight at 1.0
+    // Formula: weight = 1 - (deviation / max_skew), clamped 0-1
+    // Negative deviation (underweight) → clamped to 1.0
+    // Positive deviation (overweight) → reduced proportionally
+    const upWeight = Math.max(0, Math.min(1, 1 - (upDeviation / maxSkew)));
+    const downWeight = Math.max(0, Math.min(1, 1 - (downDeviation / maxSkew)));
+
+    return { upWeight, downWeight };
   }
 
   /**

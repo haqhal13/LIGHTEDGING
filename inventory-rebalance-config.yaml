@@ -89,20 +89,20 @@ max_trade_size: 35.0
 #   1-Hour @ $0.80:    $0.50 + (0.80 × 8)  = $6.90
 #   15-Min @ $0.80:    $0.25 + (0.80 × 12) = $9.85
 
-# --- 1-HOUR MARKET SETTINGS (gabagool22 formula) ---
-# Formula: $0.50 + (price × $8.00), clamped $0.01-$14.00
-sizing_1h_base: 0.50
-sizing_1h_multiplier: 8.00
-sizing_1h_min_trade: 0.01
-sizing_1h_max_trade: 14.00
+# --- 1-HOUR MARKET SETTINGS ---
+# Formula: $1.00 + (price × 12.00), clamped $0.50-$20.00
+sizing_1h_base: 1.00
+sizing_1h_multiplier: 12.00
+sizing_1h_min_trade: 0.50
+sizing_1h_max_trade: 20.00
 sizing_1h_cooldown_sec: 3
 
-# --- 15-MINUTE MARKET SETTINGS (gabagool22 formula) ---
-# Formula: $0.25 + (price × $12.00), clamped $0.01-$26.00
-sizing_15m_base: 0.25
-sizing_15m_multiplier: 12.00
-sizing_15m_min_trade: 0.01
-sizing_15m_max_trade: 26.00
+# --- 15-MINUTE MARKET SETTINGS ---
+# Formula: $0.50 + (price × 16.00), clamped $0.50-$35.00
+sizing_15m_base: 0.50
+sizing_15m_multiplier: 16.00
+sizing_15m_min_trade: 0.50
+sizing_15m_max_trade: 35.00
 sizing_15m_cooldown_sec: 1
 
 # ----------------------------------------------------------------------------
@@ -135,15 +135,15 @@ sizing_15m_cooldown_sec: 1
 #   - Larger trades at 0.50 = More profit in balanced markets
 #   - Smaller trades at extremes = Protect capital when risky
 
-bell_curve_enabled: false
+bell_curve_enabled: true
 # Enable bell curve sizing (true/false)
-# DISABLED for gabagool22 - pure static formula with no curve adjustments
+# Trade more at 0.50 (safest), less at extremes (riskiest)
 
-bell_curve_peak_multiplier: 1.0
-# Trade size multiplier at price 0.50 (disabled)
+bell_curve_peak_multiplier: 1.75
+# Trade size multiplier at price 0.50 (peak)
 
-bell_curve_extreme_multiplier: 1.0
-# Trade size multiplier at price 0.10 or 0.90 (disabled)
+bell_curve_extreme_multiplier: 0.40
+# Trade size multiplier at price 0.10 or 0.90 (extreme)
 
 # ----------------------------------------------------------------------------
 # 3d. GABAGOOL22 ASSET ALLOCATION (BTC vs ETH split)

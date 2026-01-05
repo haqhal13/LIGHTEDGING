@@ -488,6 +488,18 @@ class PriceStreamLogger {
       return;
     }
 
+    // Log next markets discovered in advance
+    const nextMarkets = this.marketDiscovery.getNextMarkets();
+    if (nextMarkets.size > 0) {
+      log('info', `🔮 Next markets discovered in advance: ${nextMarkets.size}`);
+      nextMarkets.forEach((market, marketType) => {
+        const startTime = new Date(market.start_time_iso).getTime();
+        const secsUntilStart = Math.round((startTime - Date.now()) / 1000);
+        log('info', `  [${marketType}] ${market.question} (starts in ${secsUntilStart}s)`);
+      });
+    }
+
+    // getAllAssetIds() now returns BOTH current and next market asset IDs
     const assetIds = this.marketDiscovery.getAllAssetIds();
 
     if (assetIds.length === 0) {
@@ -939,6 +951,14 @@ class PriceStreamLogger {
    */
   getCurrentMarkets(): Map<string, MarketInfo> {
     return this.marketDiscovery.getCurrentMarkets();
+  }
+
+  /**
+   * Get next markets (discovered in advance for seamless switching)
+   * These markets start in the future but are already subscribed for price data
+   */
+  getNextMarkets(): Map<string, MarketInfo> {
+    return this.marketDiscovery.getNextMarkets();
   }
 
   /**

@@ -2148,7 +2148,17 @@ class MarketTracker {
             let timeLeftStr = '';
             if (market.endDate && market.endDate > 0) {
                 const endDateMs = market.endDate < 10000000000 ? market.endDate * 1000 : market.endDate;
-                const timeLeftMs = endDateMs - now;
+                let timeLeftMs = endDateMs - now;
+
+                // Cap time left based on market type (1h markets can't show more than 60 min)
+                const isHourlyMarket = market.marketKey.includes('-1h');
+                const is15MinMarket = market.marketKey.includes('-15');
+                if (isHourlyMarket && timeLeftMs > 60 * 60 * 1000) {
+                    timeLeftMs = 60 * 60 * 1000; // Cap at 60 minutes
+                } else if (is15MinMarket && timeLeftMs > 15 * 60 * 1000) {
+                    timeLeftMs = 15 * 60 * 1000; // Cap at 15 minutes
+                }
+
                 if (timeLeftMs > 0) {
                     const mins = Math.floor(timeLeftMs / 60000);
                     const secs = Math.floor((timeLeftMs % 60000) / 1000);

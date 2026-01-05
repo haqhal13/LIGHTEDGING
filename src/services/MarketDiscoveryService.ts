@@ -351,9 +351,45 @@ export class MarketDiscoveryService {
     return this.currentMarkets;
   }
 
+  /**
+   * Get next markets (discovered in advance for seamless switching)
+   */
+  getNextMarkets(): Map<string, MarketInfo> {
+    return this.nextMarkets;
+  }
+
+  /**
+   * Get all asset IDs from both current AND next markets
+   * This allows subscribing to next market prices in advance
+   */
   getAllAssetIds(): string[] {
     const assetIds: string[] = [];
+
+    // Current markets
     Array.from(this.currentMarkets.values()).forEach(market => {
+      for (const token of market.tokens) {
+        assetIds.push(token.token_id);
+      }
+    });
+
+    // Next markets (for advance subscription)
+    Array.from(this.nextMarkets.values()).forEach(market => {
+      for (const token of market.tokens) {
+        if (!assetIds.includes(token.token_id)) {
+          assetIds.push(token.token_id);
+        }
+      }
+    });
+
+    return assetIds;
+  }
+
+  /**
+   * Get asset IDs for next markets only
+   */
+  getNextMarketAssetIds(): string[] {
+    const assetIds: string[] = [];
+    Array.from(this.nextMarkets.values()).forEach(market => {
       for (const token of market.tokens) {
         assetIds.push(token.token_id);
       }
@@ -362,12 +398,22 @@ export class MarketDiscoveryService {
   }
 
   getMarketByAssetId(assetId: string): MarketInfo | null {
-    const markets = Array.from(this.currentMarkets.values());
-    for (const market of markets) {
+    // Check current markets first
+    const currentMarkets = Array.from(this.currentMarkets.values());
+    for (const market of currentMarkets) {
       if (market.tokens.some(t => t.token_id === assetId)) {
         return market;
       }
     }
+
+    // Also check next markets (for advance price tracking)
+    const nextMarkets = Array.from(this.nextMarkets.values());
+    for (const market of nextMarkets) {
+      if (market.tokens.some(t => t.token_id === assetId)) {
+        return market;
+      }
+    }
+
     return null;
   }
 
